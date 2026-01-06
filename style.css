@@ -650,3 +650,11 @@ body {
         grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     }
 }
+
+#feedback {
+    opacity: 1 !important;
+    font-size: 18px;
+    margin-top: 12px;
+    min-height: 28px;
+    transition: opacity 0.2s ease;
+}

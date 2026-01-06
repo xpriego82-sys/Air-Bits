@@ -152,30 +152,6 @@ function saveFastWeights() {
     localStorage.setItem("airbits_fastweights", JSON.stringify(fastWeights));
 }
 
-/* ----------------- PARSER CSV ----------------- */
-
-function parseCSV(text) {
-    const lines = text.split(/\r?\n/).filter(l => l.trim() !== "");
-    if (lines.length < 2) return [];
-
-    const headers = lines[0].split(",").map(h => h.trim());
-    const rows = [];
-
-    for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i].split(",");
-        if (cols.length !== headers.length) continue;
-
-        const obj = {};
-        headers.forEach((h, idx) => {
-            obj[h] = cols[idx].trim();
-        });
-
-        rows.push(obj);
-    }
-
-    return rows;
-}
-
 /* ----------------- UTILIDADES ----------------- */
 
 function shuffle(arr) {
@@ -781,11 +757,87 @@ function startSystemDrill(system) {
 }
 
 /* ============================================================
-   Air&Bits — APP.JS (PARTE 4/6)
-   Corrección, estadísticas, avance, SRS
+   Air&Bits — APP.JS (PARTE 4/6 REGENERADA)
+   Corrección, feedback PRO, estadísticas, avance, SRS
    ============================================================ */
 
-/* ----------------- CORRECCIÓN DE RESPUESTAS ----------------- */
+/* ----------------- PARSER CSV (ROBUSTO) ----------------- */
+/*
+  - Soporta comillas dobles, comas internas y saltos de línea dentro de campos.
+  - Auto-detecta separador: "," o ";" (según la cabecera).
+*/
+function parseCSV(text) {
+    // Normalizar saltos de línea sin regex literals
+    const raw = String(text).split("\r\n").join("\n").split("\r").join("\n");
+
+    const firstLine = raw.split("\n").find(l => l.trim() !== "") || "";
+
+    // Detectar separador por cabecera (típico: Europa usa ';')
+    const commaCount = (firstLine.match(/,/g) || []).length;
+    const semiCount  = (firstLine.match(/;/g) || []).length;
+    const sep = semiCount > commaCount ? ";" : ",";
+
+    const rows = [];
+    let current = [];
+    let insideQuotes = false;
+    let value = "";
+
+    for (let i = 0; i < raw.length; i++) {
+        const c = raw[i];
+        const next = raw[i + 1];
+
+        // Escapar comillas dobles dentro de comillas: "" -> "
+        if (c === '"' && next === '"') {
+            value += '"';
+            i++;
+            continue;
+        }
+
+        if (c === '"') {
+            insideQuotes = !insideQuotes;
+            continue;
+        }
+
+        if (c === sep && !insideQuotes) {
+            current.push(value.trim());
+            value = "";
+            continue;
+        }
+
+        if (c === "\n" && !insideQuotes) {
+            if (value.length > 0 || current.length > 0) {
+                current.push(value.trim());
+                rows.push(current);
+            }
+            current = [];
+            value = "";
+            continue;
+        }
+
+        value += c;
+    }
+
+    if (value.length > 0 || current.length > 0) {
+        current.push(value.trim());
+        rows.push(current);
+    }
+
+    if (!rows.length) return [];
+
+    const headers = rows.shift().map(h => (h || "").trim());
+
+    return rows
+        .filter(r => r.some(cell => (cell || "").trim() !== ""))
+        .map(r => {
+            const obj = {};
+            headers.forEach((h, i) => {
+                obj[h] = (r[i] ?? "").toString().trim();
+            });
+            return obj;
+        });
+}
+
+/* ----------------- FEEDBACK PRO + CORRECCIÓN ----------------- */
 
 function checkAnswer(letter) {
     const q =
@@ -795,40 +847,76 @@ function checkAnswer(letter) {
         mode === "srs" ? srsCurrent :
         filteredQuestions[currentIndex];
 
-    const correct = q.Correct.trim().toUpperCase();
+    // Leer respuesta correcta (CSV: CorrectAnswer). Fallback: Correct (banco antiguo).
+    const correct = (q.CorrectAnswer || q.Correct || "").trim().toUpperCase();
     const isCorrect = letter === correct;
+
+    // Bloquear botones (si existen)
+    const buttons = document.querySelectorAll(".modern-options button");
+    buttons.forEach(b => { try { b.disabled = true; } catch(e) {} });
 
     const feedback = document.getElementById("feedback");
 
-    if (isCorrect) {
-        playCorrect();
-        vibrate("correct");
-        feedback.textContent = "✔️ Correcto";
-        feedback.style.color = "#2e7d32";
-        q._correct = true;
-        updateStats(q, true);
-        updateSrs(q, true);
-    } else {
-        playWrong();
-        vibrate("wrong");
-        feedback.textContent = "❌ Incorrecto";
-        feedback.style.color = "#c62828";
-        q._wrongCount = (q._wrongCount || 0) + 1;
-        updateStats(q, false);
-        updateSrs(q, false);
+    // Si no hay clave, avisar pero permitir avanzar (no bloquea la app)
+    if (!correct || !["A","B","C","D"].includes(correct)) {
+        if (feedback) {
+            feedback.textContent = "⚠️ Esta pregunta no tiene CorrectAnswer válido en el CSV.";
+            feedback.style.color = "#b26a00";
+        }
+        // Avanzar igual
+        setTimeout(() => {
+            try { nextQuestion(); } catch (e) { console.error(e); showMenu(); }
+        }, 800);
+        return;
     }
 
-    highlightCorrectOption(correct);
+    try {
+        if (isCorrect) {
+            playCorrect();
+            vibrate("correct");
+            if (feedback) {
+                feedback.textContent = "✔️ Correcto";
+                feedback.style.color = "#2e7d32";
+            }
+            q._correct = true;
+            updateStats(q, true);
+            updateSrs(q, true);
+        } else {
+            playWrong();
+            vibrate("wrong");
+            if (feedback) {
+                feedback.textContent = "❌ Incorrecto";
+                feedback.style.color = "#c62828";
+            }
+            q._wrongCount = (q._wrongCount || 0) + 1;
+            updateStats(q, false);
+            updateSrs(q, false);
+        }
 
+        // Marcar opción correcta si podemos
+        try { highlightCorrectOption(correct); } catch (e) { console.warn(e); }
+
+    } catch (err) {
+        console.error("checkAnswer error:", err);
+        if (feedback) {
+            feedback.textContent = "⚠️ Error interno. Avanzando…";
+            feedback.style.color = "#b26a00";
+        }
+    }
+
+    // Avanzar SIEMPRE (aunque haya error)
     setTimeout(() => {
-        nextQuestion();
-    }, 600);
+        try { nextQuestion(); } catch (e) { console.error(e); showMenu(); }
+    }, 1200);
 }
+
 
 function highlightCorrectOption(correctLetter) {
     const buttons = document.querySelectorAll(".modern-options button");
+
     buttons.forEach(btn => {
         const letter = btn.querySelector(".opt-letter")?.textContent;
+
         if (!letter) return;
 
         if (letter === correctLetter) {
