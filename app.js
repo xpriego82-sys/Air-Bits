@@ -99,8 +99,6 @@ function createUser(name) {
     };
 
     data.currentUserId = id;
-    user.stats[key].lastSeen = Date.now();
-
     saveUserData(data);
     updateCurrentUserInfo();
 }
