@@ -142,6 +142,20 @@ let appSettings = {
     visualTheme: "airbus"
 };
 
+function loadStudySettings() {
+    const raw = localStorage.getItem("airbits_studysettings");
+    if (raw) {
+        try {
+            const obj = JSON.parse(raw);
+            studySettings = { ...studySettings, ...obj };
+        } catch (e) {}
+    }
+}
+
+function saveStudySettings() {
+    localStorage.setItem("airbits_studysettings", JSON.stringify(studySettings));
+}
+
 function loadAppSettings() {
     const raw = localStorage.getItem("airbits_settings");
     if (raw) appSettings = JSON.parse(raw);
@@ -236,6 +250,21 @@ function todayISO() {
     return new Date().toISOString().split("T")[0];
 }
 
+
+
+function saveLastSession(state) {
+    try { localStorage.setItem("airbits_lastsession", JSON.stringify(state)); } catch(e) {}
+}
+
+function loadLastSession() {
+    const raw = localStorage.getItem("airbits_lastsession");
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch(e) { return null; }
+}
+
+function clearLastSession() {
+    localStorage.removeItem("airbits_lastsession");
+}
 /* ============================================================
    Air&Bits — APP.JS (PARTE 2/6)
    Banco de preguntas, filtros, menú principal
@@ -288,7 +317,61 @@ function handleCSVImport(event) {
         questions.forEach(q => syncQuestionRuntimeState(q));
         filteredQuestions = [...questions];
 
-        alert("Banco de preguntas importado correctamente.");
+        // Reanudar sesión si existe
+        const last = loadLastSession();
+        if (last && last.bankSignature && last.bankSignature === String(questions.length)) {
+            const ok = confirm(`¿Continuar donde lo dejaste?
+Modo: ${last.mode}`);
+            if (ok) {
+                // Restaurar filtros básicos
+                if (last.filteredIds && last.filteredIds.length) {
+                    const idSet = new Set(last.filteredIds.map(String));
+                    filteredQuestions = questions.filter(q => idSet.has(String(q.ID)));
+                }
+                mode = last.mode;
+                if (mode === "review") {
+                    studySettings.reviewRandom = !!last.reviewRandom;
+                    saveStudySettings();
+                    if (studySettings.reviewRandom) {
+                        reviewQueue = filteredQuestions.filter(q => String(q.ID) !== String(last.currentId));
+                        shuffle(reviewQueue);
+                        reviewCurrent = questions.find(q => String(q.ID) === String(last.currentId)) || null;
+                        showQuestion();
+                    } else {
+                        currentIndex = Math.max(0, filteredQuestions.findIndex(q => String(q.ID) === String(last.currentId)));
+                        showQuestion();
+                    }
+                    showQuestionBankSettings();
+                    return;
+                }
+                if (mode === "flash") {
+                    flashQueue = filteredQuestions.filter(q => String(q.ID) !== String(last.currentId));
+                    shuffle(flashQueue);
+                    flashCurrent = questions.find(q => String(q.ID) === String(last.currentId)) || null;
+                    flashRevealed = false;
+                    showFlashcard();
+                    showQuestionBankSettings();
+                    return;
+                }
+            }
+        }
+        // Si no se reanuda, sigue normal
+        clearLastSession();
+
+        // Validación rápida del banco
+        const missingCorrect = questions.filter(q => !(q.CorrectAnswer || q.Correct || "").trim()).length;
+        const missingOpts = questions.filter(q => !q.OptionA || !q.OptionB || !q.OptionC || !q.OptionD).length;
+        const total = questions.length;
+
+        alert(
+            "Banco importado ✅\n\n" +
+            `Total: ${total}\n` +
+            `Sin CorrectAnswer: ${missingCorrect}\n` +
+            `Con opciones incompletas: ${missingOpts}`
+        );
+
+
+
         showQuestionBankSettings();
     };
 
@@ -540,6 +623,8 @@ function showQuestion() {
             <button class="btn-secondary" onclick="playClick(); showMenu()">Volver</button>
         </div>
     `;
+
+    snapshotSession();
 }
 
 /* ----------------- MODO REPASO ----------------- */
@@ -617,6 +702,8 @@ function showFlashcard() {
             </div>
         </div>
     `;
+
+    snapshotSession();
 }
 
 function revealFlashcard() {
@@ -734,6 +821,8 @@ function showExamQuestion() {
             </div>
         </div>
     `;
+
+    snapshotSession();
 }
 
 function finishExam() {
@@ -743,9 +832,10 @@ function finishExam() {
     const total = examQuestions.length;
     const percent = Math.round((correct / total) * 100);
 
+    const wrongQs = examQuestions.filter(q => !q._correct);
+
     document.getElementById("app").innerHTML = `
         <div class="card exam-result">
-
             <h2>📝 Examen finalizado</h2>
 
             <div class="result-number">${percent}%</div>
@@ -755,10 +845,37 @@ function finishExam() {
                 <p><strong>Falladas:</strong> ${total - correct}</p>
             </div>
 
+            <div style="margin-top:16px; text-align:left;">
+                <h3 style="margin-bottom:8px;">Revisar fallos</h3>
+                ${wrongQs.length ? wrongQs.map((q, i) => `
+                    <div style="padding:10px; border:1px solid rgba(0,0,0,0.1); border-radius:10px; margin-bottom:10px;">
+                        <div style="font-size:13px; opacity:0.7;">${q.System || "Otros"} • ID ${q.ID}</div>
+                        <div style="margin:6px 0; font-weight:600;">${q.Question}</div>
+                        <button class="btn-secondary" onclick="playClick(); reviewSingleWrong(${i})">Revisar</button>
+                    </div>
+                `).join("") : "<p>✅ No hay fallos.</p>"}
+            </div>
+
             <button class="btn-primary" onclick="playClick(); showMenu()">Volver al menú</button>
         </div>
     `;
 }
+
+function reviewSingleWrong(i) {
+    const wrongQs = examQuestions.filter(q => !q._correct);
+    const q = wrongQs[i];
+    if (!q) return showMenu();
+
+    // Revisión como repaso (no cuenta como examen)
+    mode = "review";
+    studySettings.reviewRandom = false;
+    saveStudySettings();
+
+    filteredQuestions = wrongQs;
+    currentIndex = i;
+    showQuestion();
+}
+
 
 /* ----------------- MODO FALLADAS ----------------- */
 
@@ -800,21 +917,69 @@ function startMarkedMode() {
 
 /* ----------------- MODO INTELIGENTE ----------------- */
 
+function buildSmartSession(pool, n) {
+    // Prioridad: SRS due > falladas > nuevas > resto
+    const now = Date.now();
+    const due = [];
+    const wrong = [];
+    const fresh = [];
+    const rest = [];
+
+    pool.forEach(q => {
+        const s = getQState(q);
+        const seen = s && (s.correct + s.wrong) > 0;
+        const isDue = s && s.srsNext && now >= s.srsNext;
+        const w = (s && s.wrong) || 0;
+
+        if (isDue) due.push(q);
+        else if (w > 0) wrong.push(q);
+        else if (!seen) fresh.push(q);
+        else rest.push(q);
+    });
+
+    shuffle(due);
+    shuffle(wrong);
+    shuffle(fresh);
+    shuffle(rest);
+
+    const result = [];
+    const take = (arr, k) => { while (arr.length && result.length < n && k-- > 0) result.push(arr.pop()); };
+
+    // mix típico: 40% due, 30% wrong, 20% fresh, 10% rest
+    take(due, Math.ceil(n * 0.4));
+    take(wrong, Math.ceil(n * 0.3));
+    take(fresh, Math.ceil(n * 0.2));
+    take(rest, n);
+
+    // si aún falta, rellena con lo que quede
+    const remaining = [...due, ...wrong, ...fresh, ...rest];
+    shuffle(remaining);
+    while (result.length < n && remaining.length) result.push(remaining.pop());
+
+    return result.slice(0, n);
+}
+
 function startSmartMode() {
     if (!filteredQuestions.length) {
         alert("No hay preguntas filtradas.");
         return;
     }
 
-    filteredQuestions.sort((a, b) => {
-        const wa = a._wrongCount || 0;
-        const wb = b._wrongCount || 0;
-        return wb - wa;
-    });
-
     mode = "review";
     currentIndex = 0;
-    showQuestion();
+
+    // Tamaño de sesión inteligente
+    const n = Math.min(30, filteredQuestions.length);
+    const session = buildSmartSession(filteredQuestions, n);
+
+    // Usamos cola aleatoria (sin repetir)
+    studySettings.reviewRandom = true;
+    saveStudySettings();
+
+    reviewQueue = [...session];
+    shuffle(reviewQueue);
+    reviewCurrent = null;
+    nextReviewQuestion();
 }
 
 /* ----------------- MODO RÁPIDO ----------------- */
@@ -870,6 +1035,8 @@ function showFastQuestion() {
             <button class="btn-secondary" onclick="playClick(); showMenu()">Volver</button>
         </div>
     `;
+
+    snapshotSession();
 }
 
 /* ----------------- MODO SWIPE ----------------- */
@@ -966,6 +1133,8 @@ function showHybridQuestion() {
             <button class="btn-secondary" onclick="playClick(); showMenu()">Volver</button>
         </div>
     `;
+
+    snapshotSession();
 }
 
 /* ----------------- MODO SRS ----------------- */
@@ -1024,6 +1193,8 @@ function showSrsQuestion() {
             <button class="btn-secondary" onclick="playClick(); showMenu()">Volver</button>
         </div>
     `;
+
+    snapshotSession();
 }
 
 /* ----------------- MODO DRILL POR SISTEMA ----------------- */
@@ -1275,6 +1446,22 @@ function getCurrentQuestionObject() {
     );
 }
 
+
+
+function snapshotSession() {
+    // Guarda el pool filtrado por IDs para poder reanudar
+    const filteredIds = (filteredQuestions || []).map(q => String(q.ID));
+    const q = getCurrentQuestionObject();
+    const currentId = q ? String(q.ID) : null;
+
+    saveLastSession({
+        bankSignature: String(questions.length),
+        mode: mode,
+        currentId,
+        filteredIds,
+        reviewRandom: !!studySettings.reviewRandom
+    });
+}
 function toggleFlagCurrent() {
     const q = getCurrentQuestionObject();
     if (!q) return;
@@ -1671,6 +1858,7 @@ function showWeaknessAnalysis() {
 
 function initApp() {
     loadAppSettings();
+    loadStudySettings();
     loadFastWeights();
     updateCurrentUserInfo();
     initAudio();
