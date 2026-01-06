@@ -22,6 +22,12 @@ let flashRevealed = false;
 
 
 let examQuestions = [];
+
+let companyExamQuestions = [];
+let companyExamIndex = 0;
+let companyExamStartTime = null;
+let companyExamTimerInterval = null;
+
 let examIndex = 0;
 let examStartTime = null;
 let examTimerInterval = null;
@@ -535,7 +541,8 @@ function showMenu() {
 
             ${createModeCard("📘", "Repaso", "Recorre todas las preguntas filtradas", "startReviewMode")}
             ${createModeCard("🃏", "Flashcards", "Mostrar respuesta + autoevaluación", "startFlashcardMode")}
-            ${createModeCard("📝", "Examen", "40 preguntas aleatorias cronometradas", "startExamMode")}
+            ${createModeCard("📝", "Examen", "Examen configurable balanceado", "startExamMode")}
+            ${createModeCard("🏢", "Compañía", "Sin feedback hasta el final", "startCompanyExamMode")}
             ${createModeCard("❌", "Falladas", "Solo tus errores", "startFailedMode")}
             ${createModeCard("🚩", "Marcadas", "Solo preguntas con flag", "startMarkedMode")}
             ${createModeCard("🧠", "Inteligente", "Orden adaptativo según tu rendimiento", "startSmartMode")}
@@ -726,6 +733,165 @@ function gradeFlashcard(knewIt) {
         updateSrs(q, true);
     }
     nextFlashcard();
+}
+
+/* ----------------- MODO COMPAÑÍA (SIN FEEDBACK) ----------------- */
+
+function startCompanyExamMode() {
+    const n = studySettings.examCount || 40;
+
+    if (filteredQuestions.length < n) {
+        alert(`Necesitas al menos ${n} preguntas filtradas.`);
+        return;
+    }
+
+    mode = "company";
+    companyExamQuestions = (studySettings.examBalanced)
+        ? buildBalancedExam(filteredQuestions, n)
+        : shuffle([...filteredQuestions]).slice(0, n);
+
+    companyExamQuestions.forEach(q => { q._companyAnswer = null; q._correct = false; });
+
+    companyExamIndex = 0;
+    companyExamStartTime = Date.now();
+
+    startCompanyExamTimer();
+    showCompanyExamQuestion();
+}
+
+function startCompanyExamTimer() {
+    const timerEl = document.getElementById("timer");
+    if (!timerEl) return;
+
+    clearInterval(companyExamTimerInterval);
+    companyExamTimerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - companyExamStartTime) / 1000);
+        const min = Math.floor(elapsed / 60);
+        const sec = elapsed % 60;
+        timerEl.textContent = `${min}:${sec.toString().padStart(2, "0")}`;
+    }, 1000);
+}
+
+function showCompanyExamQuestion() {
+    const q = companyExamQuestions[companyExamIndex];
+    if (!q) return finishCompanyExam();
+
+    document.getElementById("app").innerHTML = `
+        <div class="card question-card">
+            <div class="q-meta">Compañía • Pregunta ${companyExamIndex + 1} / ${companyExamQuestions.length} ${q._flagged ? " <span style=\"color:#d32f2f;font-weight:700;\">🚩 MARCADA</span>" : ""}</div>
+
+            <div class="question-text">${q.Question}</div>
+
+            <div class="options modern-options">
+                <button onclick="playClick(); companySelect('A')"><span class="opt-letter">A</span><span>${q.OptionA}</span></button>
+                <button onclick="playClick(); companySelect('B')"><span class="opt-letter">B</span><span>${q.OptionB}</span></button>
+                <button onclick="playClick(); companySelect('C')"><span class="opt-letter">C</span><span>${q.OptionC}</span></button>
+                <button onclick="playClick(); companySelect('D')"><span class="opt-letter">D</span><span>${q.OptionD}</span></button>
+            </div>
+
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+                <button class="btn-secondary" onclick="playClick(); toggleFlagCurrent()">🚩 Marcar / Desmarcar</button>
+                <button class="btn-secondary" onclick="playClick(); companySkip()">⏭️ Saltar</button>
+            </div>
+        </div>
+    `;
+
+    snapshotSession();
+}
+
+function companySelect(letter) {
+    const q = companyExamQuestions[companyExamIndex];
+    if (!q) return;
+
+    q._companyAnswer = letter;
+
+    // Guardar stats solo al final (simula examen real), pero sí guardamos lastSeen
+    updateStats(q, true); // cuenta intento diario (sin sumar correct/wrong aquí de forma estricta)
+    // Revertir el incremento para no contaminar stats: dejamos solo lastSeen/daily progress
+    const wrap = getUserStatsObject();
+    if (wrap) {
+        const key = getQKey(q);
+        if (wrap.user.stats[key]) {
+            wrap.user.stats[key].correct = wrap.user.stats[key].correct || 0;
+            wrap.user.stats[key].wrong = wrap.user.stats[key].wrong || 0;
+            saveUserData(wrap.data);
+        }
+    }
+
+    companyExamIndex++;
+    showCompanyExamQuestion();
+}
+
+function companySkip() {
+    companyExamIndex++;
+    showCompanyExamQuestion();
+}
+
+function finishCompanyExam() {
+    clearInterval(companyExamTimerInterval);
+
+    // Corrección
+    companyExamQuestions.forEach(q => {
+        const correct = (q.CorrectAnswer || q.Correct || "").trim().toUpperCase();
+        q._correct = q._companyAnswer && q._companyAnswer === correct;
+
+        // Actualizar stats reales ahora
+        if (q._companyAnswer) {
+            updateStats(q, q._correct);
+            updateSrs(q, q._correct);
+        }
+    });
+
+    const correctN = companyExamQuestions.filter(q => q._correct).length;
+    const total = companyExamQuestions.length;
+    const percent = Math.round((correctN / total) * 100);
+
+    const wrongQs = companyExamQuestions.filter(q => !q._correct);
+
+    document.getElementById("app").innerHTML = `
+        <div class="card exam-result">
+            <h2>🏢 Examen Compañía finalizado</h2>
+            <div class="result-number">${percent}%</div>
+
+            <div class="result-details">
+                <p><strong>Correctas:</strong> ${correctN} / ${total}</p>
+                <p><strong>Falladas:</strong> ${total - correctN}</p>
+            </div>
+
+            <div style="margin-top:16px; text-align:left;">
+                <h3 style="margin-bottom:8px;">Revisar fallos</h3>
+                ${wrongQs.length ? wrongQs.map((q, i) => `
+                    <div style="padding:10px; border:1px solid rgba(0,0,0,0.1); border-radius:10px; margin-bottom:10px;">
+                        <div style="font-size:13px; opacity:0.7;">${q.System || "Otros"} • ID ${q.ID}</div>
+                        <div style="margin:6px 0; font-weight:600;">${q.Question}</div>
+                        <div style="font-size:14px; margin:6px 0;">
+                            <strong>Tu respuesta:</strong> ${q._companyAnswer || "(sin responder)"} • 
+                            <strong>Correcta:</strong> ${(q.CorrectAnswer || q.Correct || "").trim().toUpperCase()}
+                        </div>
+                        <button class="btn-secondary" onclick="playClick(); reviewCompanyWrong(${i})">Revisar</button>
+                    </div>
+                `).join("") : "<p>✅ No hay fallos.</p>"}
+            </div>
+
+            <button class="btn-primary" onclick="playClick(); showMenu()">Volver al menú</button>
+        </div>
+    `;
+
+    clearLastSession();
+}
+
+function reviewCompanyWrong(i) {
+    const wrongQs = companyExamQuestions.filter(q => !q._correct);
+    const q = wrongQs[i];
+    if (!q) return showMenu();
+
+    mode = "review";
+    studySettings.reviewRandom = false;
+    saveStudySettings();
+
+    filteredQuestions = wrongQs;
+    currentIndex = i;
+    showQuestion();
 }
 
 /* ----------------- MODO EXAMEN ----------------- */
@@ -1442,6 +1608,7 @@ function getCurrentQuestionObject() {
         mode === "srs" ? srsCurrent :
         mode === "swipe" ? swipeCurrent :
         mode === "flash" ? flashCurrent :
+        mode === "company" ? companyExamQuestions[companyExamIndex] :
         filteredQuestions[currentIndex]
     );
 }
@@ -1672,6 +1839,56 @@ function changeTheme(theme) {
 
 /* ----------------- AJUSTES → USUARIOS ----------------- */
 
+function exportProgress() {
+    const data = loadUserData();
+    const uid = data.currentUserId;
+    if (!uid) { alert("No hay usuario seleccionado."); return; }
+
+    const payload = {
+        version: 1,
+        exportedAt: Date.now(),
+        userId: uid,
+        user: data.users[uid]
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `airbits_progress_${data.users[uid].name || "user"}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
+function importProgressFromFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = e => {
+        try {
+            const payload = JSON.parse(e.target.result);
+            if (!payload.user || !payload.user.name) throw new Error("Formato inválido");
+
+            const data = loadUserData();
+            const id = "u" + Date.now();
+            data.users[id] = payload.user;
+            data.currentUserId = id;
+            saveUserData(data);
+
+            alert("Progreso importado ✅");
+            updateCurrentUserInfo();
+            showUserManagement();
+        } catch (err) {
+            alert("No se pudo importar el progreso (JSON inválido).");
+        }
+    };
+    reader.readAsText(file);
+}
+
 function showUserManagement() {
     const data = loadUserData();
     const users = data.users;
@@ -1690,6 +1907,13 @@ function showUserManagement() {
                     </div>
                 `).join("")}
             </div>
+        </div>
+
+        <div class="setting-group">
+            <h4>Progreso</h4>
+            <button onclick="playClick(); exportProgress()">⬇️ Exportar progreso (JSON)</button>
+            <p style="margin-top:8px; opacity:0.7;">Importar crea un usuario nuevo con ese progreso.</p>
+            <input type="file" accept=".json" onchange="importProgressFromFile(event)">
         </div>
 
         <div class="setting-group">
@@ -1804,55 +2028,80 @@ function showWeaknessAnalysis() {
     }
 
     const stats = user.stats || {};
-    const rows = [];
+    const bySystem = {};
 
     for (const q of questions) {
         const key = q.ID || q.Question;
         const s = stats[key];
-
         if (!s) continue;
 
-        const total = s.correct + s.wrong;
-        if (total === 0) continue;
+        const total = (s.correct || 0) + (s.wrong || 0);
+        if (!total) continue;
 
-        const acc = Math.round((s.correct / total) * 100);
-
-        rows.push({
-            system: q.System,
-            question: q.Question,
-            total,
-            accuracy: acc
-        });
+        const sys = (q.System || "Otros").trim() || "Otros";
+        if (!bySystem[sys]) bySystem[sys] = { sys, correct: 0, wrong: 0, total: 0, acc: 0 };
+        bySystem[sys].correct += (s.correct || 0);
+        bySystem[sys].wrong += (s.wrong || 0);
+        bySystem[sys].total += total;
     }
 
-    rows.sort((a, b) => a.accuracy - b.accuracy);
+    const rows = Object.values(bySystem).map(r => {
+        r.acc = r.total ? Math.round((r.correct / r.total) * 100) : 0;
+        return r;
+    });
+
+    rows.sort((a, b) => a.acc - b.acc);
 
     document.getElementById("app").innerHTML = `
         <div class="card">
-            <h2>🩻 Análisis de debilidades</h2>
+            <h2>🩻 Debilidades por sistema</h2>
+            <p style="opacity:0.7;">Ordenado de menor a mayor precisión.</p>
 
             <table>
                 <tr>
                     <th>Sistema</th>
-                    <th>Pregunta</th>
                     <th>Intentos</th>
                     <th>Precisión</th>
+                    <th>Acción</th>
                 </tr>
 
                 ${rows.map(r => `
                     <tr>
-                        <td>${r.system}</td>
-                        <td>${r.question}</td>
+                        <td>${r.sys}</td>
                         <td>${r.total}</td>
-                        <td data-acc="${r.accuracy}">${r.accuracy}%</td>
+                        <td data-acc="${r.acc}">${r.acc}%</td>
+                        <td><button class="btn-secondary" onclick="playClick(); startWeakSystemDrill('${r.sys.replace(/'/g, "\'")}')">Entrenar 20</button></td>
                     </tr>
                 `).join("")}
             </table>
 
-            <button class="btn-secondary" onclick="playClick(); showMenu()">⬅️ Volver</button>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:16px;">
+                <button class="btn-secondary" onclick="playClick(); showMenu()">⬅️ Volver</button>
+            </div>
         </div>
     `;
 }
+
+function startWeakSystemDrill(system) {
+    const pool = questions.filter(q => (q.System || "Otros") === system);
+    if (!pool.length) {
+        alert("No hay preguntas para este sistema.");
+        return;
+    }
+    filteredQuestions = pool;
+
+    // sesión inteligente dentro del sistema: 20
+    mode = "review";
+    studySettings.reviewRandom = true;
+    saveStudySettings();
+
+    const session = buildSmartSession(filteredQuestions, Math.min(20, filteredQuestions.length));
+    reviewQueue = [...session];
+    shuffle(reviewQueue);
+    reviewCurrent = null;
+    nextReviewQuestion();
+}
+
 
 /* ----------------- INICIALIZACIÓN ----------------- */
 
