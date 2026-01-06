@@ -11,6 +11,16 @@ let filteredQuestions = [];
 let mode = null;
 let currentIndex = 0;
 
+let studySettings = { reviewRandom: true, examBalanced: true, examCount: 40 };
+
+let reviewQueue = [];
+let reviewCurrent = null;
+
+let flashQueue = [];
+let flashCurrent = null;
+let flashRevealed = false;
+
+
 let examQuestions = [];
 let examIndex = 0;
 let examStartTime = null;
@@ -89,6 +99,8 @@ function createUser(name) {
     };
 
     data.currentUserId = id;
+    user.stats[key].lastSeen = Date.now();
+
     saveUserData(data);
     updateCurrentUserInfo();
 }
@@ -154,8 +166,72 @@ function saveFastWeights() {
 
 /* ----------------- UTILIDADES ----------------- */
 
+function getUserId() {
+    const data = loadUserData();
+    return data.currentUserId || null;
+}
+
+function getQKey(q) {
+    return String(q.ID || q.Question || "");
+}
+
+function getUserStatsObject() {
+    const data = loadUserData();
+    const uid = data.currentUserId;
+    if (!uid || !data.users[uid]) return null;
+    if (!data.users[uid].stats) data.users[uid].stats = {};
+    return { data, user: data.users[uid] };
+}
+
+function ensureQState(q) {
+    const wrap = getUserStatsObject();
+    if (!wrap) return null;
+    const key = getQKey(q);
+    if (!wrap.user.stats[key]) {
+        wrap.user.stats[key] = { correct: 0, wrong: 0, srsLevel: 0, srsNext: 0, flagged: false, lastSeen: null };
+        saveUserData(wrap.data);
+    }
+    return wrap.user.stats[key];
+}
+
+function getQState(q) {
+    const wrap = getUserStatsObject();
+    if (!wrap) return null;
+    const key = getQKey(q);
+    return wrap.user.stats[key] || null;
+}
+
+function setFlag(q, flagged) {
+    const wrap = getUserStatsObject();
+    if (!wrap) return;
+    const s = ensureQState(q);
+    s.flagged = !!flagged;
+    saveUserData(wrap.data);
+}
+
+function isFlagged(q) {
+    const s = getQState(q);
+    return !!(s && s.flagged);
+}
+
+function syncQuestionRuntimeState(q) {
+    const s = ensureQState(q);
+    if (!s) return;
+    q._wrongCount = s.wrong || 0;
+    q._correctCount = s.correct || 0;
+    q._srsLevel = s.srsLevel || 0;
+    q._srsNext = s.srsNext || 0;
+    q._flagged = !!s.flagged;
+}
+
+
 function shuffle(arr) {
-    return arr.sort(() => Math.random() - 0.5);
+    // Fisher–Yates (uniform)
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
 }
 
 function todayISO() {
@@ -210,6 +286,8 @@ function handleCSVImport(event) {
         }
 
         questions = parsed;
+        // Sincronizar estado persistente del usuario (fallos, SRS, flags)
+        questions.forEach(q => syncQuestionRuntimeState(q));
         filteredQuestions = [...questions];
 
         alert("Banco de preguntas importado correctamente.");
@@ -243,11 +321,21 @@ function applyFilters() {
     const sys = document.getElementById("filterSystem").value;
     const diff = document.getElementById("filterDifficulty").value;
 
+    const search = (document.getElementById("filterSearch")?.value || "").trim().toLowerCase();
+    studySettings.reviewRandom = (document.getElementById("filterReviewRandom")?.value || "1") === "1";
+    studySettings.examBalanced = (document.getElementById("filterExamBalanced")?.value || "1") === "1";
+    studySettings.examCount = parseInt(document.getElementById("filterExamCount")?.value || "40", 10);
+
+
     filteredQuestions = questions.filter(q => {
         if (cat && q.Category !== cat) return false;
         if (ac && q.Aircraft !== ac) return false;
         if (sys && q.System !== sys) return false;
         if (diff && q.Difficulty !== diff) return false;
+        if (search) {
+            const blob = (q.Question + ' ' + q.OptionA + ' ' + q.OptionB + ' ' + q.OptionC + ' ' + q.OptionD).toLowerCase();
+            if (!blob.includes(search)) return false;
+        }
         return true;
     });
 
@@ -292,6 +380,39 @@ function showMenu() {
             <div class="filter-grid">
 
                 <div class="filter-item">
+                    <label>Buscar texto</label>
+                    <input type="text" id="filterSearch" placeholder="Ej: RAT, PTU, VLO..." />
+                </div>
+
+                <div class="filter-item">
+                    <label>Repaso aleatorio</label>
+                    <select id="filterReviewRandom">
+                        <option value="1" selected>Sí</option>
+                        <option value="0">No</option>
+                    </select>
+                </div>
+
+                <div class="filter-item">
+                    <label>Examen balanceado por sistema</label>
+                    <select id="filterExamBalanced">
+                        <option value="1" selected>Sí</option>
+                        <option value="0">No</option>
+                    </select>
+                </div>
+
+                <div class="filter-item">
+                    <label>Nº preguntas examen</label>
+                    <select id="filterExamCount">
+                        <option value="20">20</option>
+                        <option value="40" selected>40</option>
+                        <option value="60">60</option>
+                        <option value="80">80</option>
+                    </select>
+                </div>
+
+
+
+                <div class="filter-item">
                     <label>Categoría</label>
                     <select id="filterCategory">
                         <option value="">Todas</option>
@@ -332,8 +453,10 @@ function showMenu() {
         <div class="card modes-grid">
 
             ${createModeCard("📘", "Repaso", "Recorre todas las preguntas filtradas", "startReviewMode")}
+            ${createModeCard("🃏", "Flashcards", "Mostrar respuesta + autoevaluación", "startFlashcardMode")}
             ${createModeCard("📝", "Examen", "40 preguntas aleatorias cronometradas", "startExamMode")}
             ${createModeCard("❌", "Falladas", "Solo tus errores", "startFailedMode")}
+            ${createModeCard("🚩", "Marcadas", "Solo preguntas con flag", "startMarkedMode")}
             ${createModeCard("🧠", "Inteligente", "Orden adaptativo según tu rendimiento", "startSmartMode")}
             ${createModeCard("⚡", "Rápido", "Flashcards con repetición de fallos", "startFastMode")}
             ${createModeCard("👆", "Swipe", "Desliza para marcar si la sabías", "startSwipeMode")}
@@ -378,8 +501,18 @@ function createOption(letter, text) {
 
 /* ----------------- MOSTRAR PREGUNTA ----------------- */
 
+function nextReviewQuestion() {
+    if (!reviewQueue.length) {
+        alert("Has completado el repaso.");
+        showMenu();
+        return;
+    }
+    reviewCurrent = reviewQueue.pop();
+    showQuestion();
+}
+
 function showQuestion() {
-    const q = filteredQuestions[currentIndex];
+    const q = (mode === "review" && studySettings.reviewRandom) ? reviewCurrent : filteredQuestions[currentIndex];
     if (!q) {
         showMenu();
         return;
@@ -388,7 +521,7 @@ function showQuestion() {
     document.getElementById("app").innerHTML = `
         <div class="card question-card">
 
-            <div class="q-meta">${q.Category || ""} • ${q.Aircraft || ""} • ${q.System || ""}</div>
+            <div class="q-meta">${q.Category || ""} • ${q.Aircraft || ""} • ${q.System || ""} ${q._flagged ? " <span style=\"color:#d32f2f;font-weight:700;\">🚩 MARCADA</span>" : ""}</div>
 
             <div class="question-text">${q.Question}</div>
 
@@ -400,6 +533,11 @@ function showQuestion() {
             </div>
 
             <div id="feedback" class="feedback-area"></div>
+
+            <div class="options" style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+                <button class="btn-secondary" onclick="playClick(); toggleFlagCurrent()">🚩 Marcar / Desmarcar</button>
+                <button class="btn-secondary" onclick="playClick(); skipQuestion()">⏭️ Saltar</button>
+            </div>
 
             <button class="btn-secondary" onclick="playClick(); showMenu()">Volver</button>
         </div>
@@ -416,19 +554,144 @@ function startReviewMode() {
 
     mode = "review";
     currentIndex = 0;
-    showQuestion();
+
+    if (studySettings.reviewRandom) {
+        reviewQueue = [...filteredQuestions];
+        shuffle(reviewQueue);
+        reviewCurrent = null;
+        nextReviewQuestion();
+    } else {
+        reviewQueue = [];
+        reviewCurrent = null;
+        showQuestion();
+    }
+}
+
+/* ----------------- MODO FLASHCARDS ----------------- */
+
+function startFlashcardMode() {
+    if (!filteredQuestions.length) {
+        alert("No hay preguntas filtradas.");
+        return;
+    }
+    mode = "flash";
+    flashQueue = [...filteredQuestions];
+    shuffle(flashQueue);
+    nextFlashcard();
+}
+
+function nextFlashcard() {
+    if (!flashQueue.length) {
+        alert("Flashcards completadas.");
+        showMenu();
+        return;
+    }
+    flashCurrent = flashQueue.pop();
+    flashRevealed = false;
+    showFlashcard();
+}
+
+function showFlashcard() {
+    const q = flashCurrent;
+    if (!q) return showMenu();
+
+    document.getElementById("app").innerHTML = `
+        <div class="card question-card">
+            <div class="q-meta">${q.Category || ""} • ${q.Aircraft || ""} • ${q.System || ""}</div>
+            <div class="question-text">${q.Question}</div>
+
+            <div class="options modern-options" style="display:${flashRevealed ? "block" : "none"};">
+                ${createOption("A", q.OptionA)}
+                ${createOption("B", q.OptionB)}
+                ${createOption("C", q.OptionC)}
+                ${createOption("D", q.OptionD)}
+            </div>
+
+            <div id="feedback" class="feedback-area"></div>
+
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+                <button class="btn-primary" onclick="playClick(); revealFlashcard()">👁️ Mostrar respuesta</button>
+                <button class="btn-secondary" onclick="playClick(); gradeFlashcard(true)">👍 La sabía</button>
+                <button class="btn-secondary" onclick="playClick(); gradeFlashcard(false)">👎 No la sabía</button>
+                <button class="btn-secondary" onclick="playClick(); toggleFlagCurrent()">🚩 Marcar</button>
+                <button class="btn-secondary" onclick="playClick(); nextFlashcard()">⏭️ Siguiente</button>
+                <button class="btn-secondary" onclick="playClick(); showMenu()">Volver</button>
+            </div>
+        </div>
+    `;
+}
+
+function revealFlashcard() {
+    flashRevealed = true;
+    showFlashcard();
+    const q = flashCurrent;
+    const correct = (q.CorrectAnswer || q.Correct || "").trim().toUpperCase();
+    try { highlightCorrectOption(correct); } catch(e) {}
+}
+
+function gradeFlashcard(knewIt) {
+    const q = flashCurrent;
+    if (!q) return;
+    if (!knewIt) {
+        q._wrongCount = (q._wrongCount || 0) + 1;
+        updateStats(q, false);
+        updateSrs(q, false);
+    } else {
+        updateStats(q, true);
+        updateSrs(q, true);
+    }
+    nextFlashcard();
 }
 
 /* ----------------- MODO EXAMEN ----------------- */
 
+function buildBalancedExam(pool, n) {
+    const groups = {};
+    pool.forEach(q => {
+        const k = (q.System || "Otros").trim() || "Otros";
+        if (!groups[k]) groups[k] = [];
+        groups[k].push(q);
+    });
+
+    const systems = Object.keys(groups);
+    systems.forEach(s => shuffle(groups[s]));
+
+    const result = [];
+    while (result.length < n) {
+        let added = false;
+        for (const s of systems) {
+            if (result.length >= n) break;
+            if (groups[s].length) {
+                result.push(groups[s].pop());
+                added = true;
+            }
+        }
+        if (!added) break;
+    }
+
+    if (result.length < n) {
+        const remaining = [];
+        systems.forEach(s => remaining.push(...groups[s]));
+        shuffle(remaining);
+        result.push(...remaining.slice(0, n - result.length));
+    }
+    return result.slice(0, n);
+}
+
 function startExamMode() {
-    if (filteredQuestions.length < 40) {
-        alert("Necesitas al menos 40 preguntas filtradas.");
+    const n = studySettings.examCount || 40;
+
+    if (filteredQuestions.length < n) {
+        alert(`Necesitas al menos ${n} preguntas filtradas.`);
         return;
     }
 
     mode = "exam";
-    examQuestions = shuffle([...filteredQuestions]).slice(0, 40);
+    if (studySettings.examBalanced) {
+        examQuestions = buildBalancedExam(filteredQuestions, studySettings.examCount || 40);
+    } else {
+        examQuestions = shuffle([...filteredQuestions]).slice(0, studySettings.examCount || 40);
+    }
     examIndex = 0;
     examStartTime = Date.now();
 
@@ -454,7 +717,7 @@ function showExamQuestion() {
     document.getElementById("app").innerHTML = `
         <div class="card question-card">
 
-            <div class="q-meta">Pregunta ${examIndex + 1} / 40</div>
+            <div class="q-meta">Pregunta ${examIndex + 1} / ${examQuestions.length} ${q._flagged ? " <span style=\"color:#d32f2f;font-weight:700;\">🚩 MARCADA</span>" : ""}</div>
 
             <div class="question-text">${q.Question}</div>
 
@@ -466,6 +729,11 @@ function showExamQuestion() {
             </div>
 
             <div id="feedback" class="feedback-area"></div>
+
+            <div class="options" style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+                <button class="btn-secondary" onclick="playClick(); toggleFlagCurrent()">🚩 Marcar / Desmarcar</button>
+                <button class="btn-secondary" onclick="playClick(); skipQuestion()">⏭️ Saltar</button>
+            </div>
         </div>
     `;
 }
@@ -508,6 +776,28 @@ function startFailedMode() {
     mode = "review";
     currentIndex = 0;
     showQuestion();
+}
+
+/* ----------------- MODO MARCADAS ----------------- */
+
+function startMarkedMode() {
+    const marked = filteredQuestions.filter(q => isFlagged(q));
+    if (!marked.length) {
+        alert("No tienes preguntas marcadas.");
+        return;
+    }
+    filteredQuestions = marked;
+    mode = "review";
+    currentIndex = 0;
+
+    if (studySettings.reviewRandom) {
+        reviewQueue = [...filteredQuestions];
+        shuffle(reviewQueue);
+        reviewCurrent = null;
+        nextReviewQuestion();
+    } else {
+        showQuestion();
+    }
 }
 
 /* ----------------- MODO INTELIGENTE ----------------- */
@@ -561,7 +851,7 @@ function showFastQuestion() {
     document.getElementById("app").innerHTML = `
         <div class="card question-card">
 
-            <div class="q-meta">${q.Category} • ${q.Aircraft} • ${q.System}</div>
+            <div class="q-meta">${q.Category} • ${q.Aircraft} • ${q.System} ${q._flagged ? " <span style=\"color:#d32f2f;font-weight:700;\">🚩 MARCADA</span>" : ""}</div>
 
             <div class="question-text">${q.Question}</div>
 
@@ -573,6 +863,11 @@ function showFastQuestion() {
             </div>
 
             <div id="feedback" class="feedback-area"></div>
+
+            <div class="options" style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+                <button class="btn-secondary" onclick="playClick(); toggleFlagCurrent()">🚩 Marcar / Desmarcar</button>
+                <button class="btn-secondary" onclick="playClick(); skipQuestion()">⏭️ Saltar</button>
+            </div>
 
             <button class="btn-secondary" onclick="playClick(); showMenu()">Volver</button>
         </div>
@@ -652,7 +947,7 @@ function showHybridQuestion() {
     document.getElementById("app").innerHTML = `
         <div class="card question-card">
 
-            <div class="q-meta">${q.Category} • ${q.Aircraft} • ${q.System}</div>
+            <div class="q-meta">${q.Category} • ${q.Aircraft} • ${q.System} ${q._flagged ? " <span style=\"color:#d32f2f;font-weight:700;\">🚩 MARCADA</span>" : ""}</div>
 
             <div class="question-text">${q.Question}</div>
 
@@ -664,6 +959,11 @@ function showHybridQuestion() {
             </div>
 
             <div id="feedback" class="feedback-area"></div>
+
+            <div class="options" style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+                <button class="btn-secondary" onclick="playClick(); toggleFlagCurrent()">🚩 Marcar / Desmarcar</button>
+                <button class="btn-secondary" onclick="playClick(); skipQuestion()">⏭️ Saltar</button>
+            </div>
 
             <button class="btn-secondary" onclick="playClick(); showMenu()">Volver</button>
         </div>
@@ -705,7 +1005,7 @@ function showSrsQuestion() {
     document.getElementById("app").innerHTML = `
         <div class="card question-card">
 
-            <div class="q-meta">${q.Category} • ${q.Aircraft} • ${q.System}</div>
+            <div class="q-meta">${q.Category} • ${q.Aircraft} • ${q.System} ${q._flagged ? " <span style=\"color:#d32f2f;font-weight:700;\">🚩 MARCADA</span>" : ""}</div>
 
             <div class="question-text">${q.Question}</div>
 
@@ -717,6 +1017,11 @@ function showSrsQuestion() {
             </div>
 
             <div id="feedback" class="feedback-area"></div>
+
+            <div class="options" style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+                <button class="btn-secondary" onclick="playClick(); toggleFlagCurrent()">🚩 Marcar / Desmarcar</button>
+                <button class="btn-secondary" onclick="playClick(); skipQuestion()">⏭️ Saltar</button>
+            </div>
 
             <button class="btn-secondary" onclick="playClick(); showMenu()">Volver</button>
         </div>
@@ -733,6 +1038,39 @@ function startSystemDrillMode() {
             <h2>Entrenar por sistema</h2>
 
             <div class="filter-grid">
+
+                <div class="filter-item">
+                    <label>Buscar texto</label>
+                    <input type="text" id="filterSearch" placeholder="Ej: RAT, PTU, VLO..." />
+                </div>
+
+                <div class="filter-item">
+                    <label>Repaso aleatorio</label>
+                    <select id="filterReviewRandom">
+                        <option value="1" selected>Sí</option>
+                        <option value="0">No</option>
+                    </select>
+                </div>
+
+                <div class="filter-item">
+                    <label>Examen balanceado por sistema</label>
+                    <select id="filterExamBalanced">
+                        <option value="1" selected>Sí</option>
+                        <option value="0">No</option>
+                    </select>
+                </div>
+
+                <div class="filter-item">
+                    <label>Nº preguntas examen</label>
+                    <select id="filterExamCount">
+                        <option value="20">20</option>
+                        <option value="40" selected>40</option>
+                        <option value="60">60</option>
+                        <option value="80">80</option>
+                    </select>
+                </div>
+
+
                 ${systems.map(s => `
                     <button onclick="playClick(); startSystemDrill('${s}')">${s}</button>
                 `).join("")}
@@ -927,16 +1265,45 @@ function highlightCorrectOption(correctLetter) {
     });
 }
 
+function getCurrentQuestionObject() {
+    return (
+        mode === "exam" ? examQuestions[examIndex] :
+        mode === "fast" ? fastCurrent :
+        mode === "hybrid" ? hybridCurrent :
+        mode === "srs" ? srsCurrent :
+        mode === "swipe" ? swipeCurrent :
+        mode === "flash" ? flashCurrent :
+        filteredQuestions[currentIndex]
+    );
+}
+
+function toggleFlagCurrent() {
+    const q = getCurrentQuestionObject();
+    if (!q) return;
+    const now = !isFlagged(q);
+    setFlag(q, now);
+    q._flagged = now;
+    alert(now ? "✅ Pregunta marcada" : "🚩 Marca quitada");
+}
+
+function skipQuestion() {
+    try { nextQuestion(); } catch (e) { console.error(e); showMenu(); }
+}
+
 /* ----------------- AVANCE ENTRE PREGUNTAS ----------------- */
 
 function nextQuestion() {
     if (mode === "review") {
-        currentIndex++;
-        if (currentIndex >= filteredQuestions.length) {
-            alert("Has completado el repaso.");
-            showMenu();
+        if (studySettings.reviewRandom) {
+            nextReviewQuestion();
         } else {
-            showQuestion();
+            currentIndex++;
+            if (currentIndex >= filteredQuestions.length) {
+                alert("Has completado el repaso.");
+                showMenu();
+            } else {
+                showQuestion();
+            }
         }
         return;
     }
@@ -982,11 +1349,10 @@ function updateStats(q, correct) {
     const key = q.ID || q.Question;
 
     if (!user.stats[key]) {
-        user.stats[key] = { correct: 0, wrong: 0 };
+        user.stats[key] = { correct: 0, wrong: 0, srsLevel: 0, srsNext: 0, flagged: false, lastSeen: null };
     }
 
-    if (correct) user.stats[key].correct++;
-    else user.stats[key].wrong++;
+    if (correct) user.stats[key].correct++; else user.stats[key].wrong++;
 
     // Progreso diario
     const today = todayISO();
@@ -1002,19 +1368,31 @@ function updateStats(q, correct) {
 /* ----------------- SRS (SPACED REPETITION SYSTEM) ----------------- */
 
 function updateSrs(q, correct) {
-    if (!q._srsLevel) q._srsLevel = 0;
+    const wrap = getUserStatsObject();
+    if (!wrap) return;
 
-    if (correct) {
-        q._srsLevel++;
-    } else {
-        q._srsLevel = Math.max(0, q._srsLevel - 1);
+    const key = getQKey(q);
+    if (!wrap.user.stats[key]) {
+        wrap.user.stats[key] = { correct: 0, wrong: 0, srsLevel: 0, srsNext: 0, flagged: false, lastSeen: null };
     }
 
+    let level = wrap.user.stats[key].srsLevel || 0;
+    if (correct) level++;
+    else level = Math.max(0, level - 1);
+
     const intervals = [0, 1, 3, 7, 14, 30]; // días
-    const idx = Math.min(q._srsLevel, intervals.length - 1);
+    const idx = Math.min(level, intervals.length - 1);
     const days = intervals[idx];
 
-    q._srsNext = Date.now() + days * 24 * 60 * 60 * 1000;
+    const next = Date.now() + days * 24 * 60 * 60 * 1000;
+
+    wrap.user.stats[key].srsLevel = level;
+    wrap.user.stats[key].srsNext = next;
+
+    q._srsLevel = level;
+    q._srsNext = next;
+
+    saveUserData(wrap.data);
 }
 
 /* ============================================================
