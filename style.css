@@ -658,3 +658,88 @@ body {
     min-height: 28px;
     transition: opacity 0.2s ease;
 }
+
+
+/* ============================================================
+   Air&Bits — MENU (LIMPIO)
+   Secciones + grid compacto + "Más modos" plegable
+   ============================================================ */
+
+.menu-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-top: 12px;
+}
+
+.menu-section {
+    background: var(--card-bg);
+    color: var(--text-dark);
+    border-radius: var(--radius);
+    border: 1px solid var(--border-dark);
+    box-shadow: var(--shadow);
+    padding: 16px;
+}
+
+.section-title {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    margin-bottom: 12px;
+    opacity: 0.85;
+}
+
+.mode-compact-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px;
+}
+
+/* tarjetas un poco más compactas */
+.mode-compact-grid .mode-card {
+    padding: 16px;
+}
+
+.mode-compact-grid .mode-icon {
+    font-size: 28px;
+    margin-bottom: 8px;
+}
+
+.mode-compact-grid .mode-title {
+    font-size: 16px;
+}
+
+.mode-compact-grid .mode-desc {
+    font-size: 12px;
+}
+
+/* <details> pulido */
+.menu-more summary.section-title {
+    cursor: pointer;
+    user-select: none;
+    margin-bottom: 0;
+}
+
+.menu-more[open] summary.section-title {
+    margin-bottom: 10px;
+}
+
+.menu-more summary.section-title::after {
+    content: " ▾";
+    opacity: 0.7;
+    font-weight: 600;
+}
+
+.menu-more[open] summary.section-title::after {
+    content: " ▴";
+}
+
+/* móvil: más compacto */
+@media (max-width: 600px) {
+    .mode-compact-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+    .menu-section {
+        padding: 14px;
+    }
+}
