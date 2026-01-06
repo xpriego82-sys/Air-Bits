@@ -461,6 +461,8 @@ function showMenu() {
 
     document.getElementById("app").innerHTML = `
         <div class="card filter-panel">
+            <details class="filters-drop" open>
+                <summary class="filters-summary">Filtros</summary>
 
             <h2>Filtros</h2>
 

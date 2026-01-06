@@ -743,3 +743,54 @@ body {
         padding: 14px;
     }
 }
+
+
+/* ============================================================
+   Filtros desplegables (compacto)
+   ============================================================ */
+
+.filters-drop {
+    border: 1px solid rgba(0,0,0,0.08);
+    border-radius: 12px;
+    padding: 10px 12px;
+    background: rgba(0,0,0,0.02);
+}
+
+.filters-summary {
+    list-style: none;
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.filters-summary::-webkit-details-marker {
+    display: none;
+}
+
+.filters-summary::after {
+    content: "▾";
+    opacity: 0.7;
+    font-weight: 700;
+}
+
+.filters-drop[open] .filters-summary::after {
+    content: "▴";
+}
+
+.filters-drop .filter-grid {
+    margin-top: 12px;
+}
+
+/* En móvil: cerrado por defecto (si no hay preferencia guardada) */
+@media (max-width: 600px) {
+    .filters-drop {
+        padding: 8px 10px;
+    }
+    .filters-summary {
+        font-size: 13px;
+    }
+}
