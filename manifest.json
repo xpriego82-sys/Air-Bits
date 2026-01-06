@@ -1,0 +1,23 @@
+{
+  "name": "Air&Bits",
+  "short_name": "Air&Bits",
+  "description": "Entrenador de banco de preguntas para aviación.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#0b1726",
+  "background_color": "#0b1726",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

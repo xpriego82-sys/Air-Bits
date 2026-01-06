@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <title>Air&Bits</title>
+
+    <!-- Viewport + safe area para iPhone/iPad -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+
+    <!-- PWA básico -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0b1726">
+
+    <!-- iOS PWA -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Air&Bits">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
+
+    <!-- Fuente limpia tipo Airbus -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link 
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" 
+        rel="stylesheet">
+
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body class="airbus">
+
+    <header>
+        <div class="header-left">
+            <div class="app-title">Air&Bits</div>
+            <div class="app-subtitle">Entrenador de banco de preguntas</div>
+        </div>
+
+        <div class="header-right">
+            <span id="currentUserInfo">Usuario: (ninguno)</span>
+            <span id="timer" class="timer"></span>
+
+            <button id="manageUsersBtn" class="header-btn">Usuarios</button>
+            <button id="settingsBtn" class="header-btn">Ajustes</button>
+            <button id="themeToggleBtn" class="header-btn">Tema</button>
+        </div>
+    </header>
+
+    <main id="app">
+        <!-- El contenido dinámico lo inyecta app.js -->
+    </main>
+
+    <footer id="footerSignature">
+        <span>Air&Bits — Training Companion</span>
+    </footer>
+
+    <script src="app.js"></script>
+
+    <!-- Registro del Service Worker para PWA -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker
+                    .register('./service-worker.js')
+                    .catch(err => console.log('SW registration failed', err));
+            });
+        }
+    </script>
+</body>
+</html>
