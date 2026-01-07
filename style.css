@@ -659,163 +659,184 @@ body {
     transition: opacity 0.2s ease;
 }
 
+
 /* ============================================================
-   Menú limpio (sidebar + secciones)
+   Air&Bits — MENU (LIMPIO)
+   Secciones + grid compacto + "Más modos" plegable
    ============================================================ */
-.menu-layout{
-    display:grid;
-    grid-template-columns: 240px 1fr;
-    gap:14px;
-    align-items:start;
-}
-.menu-sidebar{
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.10);
-    border-radius: 16px;
-    padding: 14px;
-    position: sticky;
-    top: 12px;
-}
-.menu-sidebar-title{
-    font-weight: 900;
-    margin-bottom: 10px;
-    opacity: 0.9;
-}
-.menu-nav-btn{
-    width: 100%;
-    display:flex;
-    align-items:center;
-    gap:10px;
-    padding: 10px 12px;
-    border-radius: 14px;
-    border: 1px solid rgba(255,255,255,0.10);
-    background: rgba(255,255,255,0.04);
-    color: var(--text);
-    cursor: pointer;
-    font-weight: 900;
-    margin-bottom: 10px;
-}
-.menu-nav-btn:hover{ background: rgba(255,255,255,0.06); }
-.menu-nav-btn.active{
-    border-color: rgba(110,168,255,0.55);
-    background: rgba(110,168,255,0.14);
-}
-.menu-nav-ic{ font-size: 18px; }
-.menu-sidebar-foot{
-    display:flex;
-    gap:10px;
-    flex-wrap:wrap;
-    margin-top: 6px;
+
+.menu-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-top: 12px;
 }
 
-.menu-main{ display:flex; flex-direction:column; gap:14px; }
-.menu-head{ display:flex; align-items:flex-end; justify-content:space-between; gap:12px; }
-.menu-title{ font-size: 20px; font-weight: 950; }
-.menu-sub{ color: rgba(255,255,255,0.68); margin-top:4px; }
+.menu-section {
+    background: var(--card-bg);
+    color: var(--text-dark);
+    border-radius: var(--radius);
+    border: 1px solid var(--border-dark);
+    box-shadow: var(--shadow);
+    padding: 16px;
+}
 
-.menu-cards{
-    display:grid;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+.section-title {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    margin-bottom: 12px;
+    opacity: 0.85;
+}
+
+.mode-compact-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
     gap: 12px;
 }
-.menu-cta-row{
-    display:flex;
-    gap:10px;
-    flex-wrap: wrap;
-    align-items:center;
+
+/* tarjetas un poco más compactas */
+.mode-compact-grid .mode-card {
+    padding: 16px;
 }
 
-.advanced-drop{
-  margin-top: 10px;
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 16px;
-  padding: 10px 12px;
-  background: rgba(255,255,255,0.03);
+.mode-compact-grid .mode-icon {
+    font-size: 28px;
+    margin-bottom: 8px;
 }
-.advanced-summary{
-  cursor: pointer;
-  user-select: none;
-  font-weight: 900;
-  opacity: 0.9;
-  list-style: none;
-  display:flex;
-  justify-content: space-between;
-  align-items:center;
-}
-.advanced-summary::-webkit-details-marker{ display:none; }
-.advanced-summary::after{ content:"▾"; opacity:0.7; }
-.advanced-drop[open] .advanced-summary::after{ content:"▴"; }
 
-@media (max-width: 900px){
-    .menu-layout{ grid-template-columns: 1fr; }
-    .menu-sidebar{
-        position: relative;
-        top: 0;
-        display:flex;
-        gap:10px;
-        overflow:auto;
-        white-space:nowrap;
+.mode-compact-grid .mode-title {
+    font-size: 16px;
+}
+
+.mode-compact-grid .mode-desc {
+    font-size: 12px;
+}
+
+/* <details> pulido */
+.menu-more summary.section-title {
+    cursor: pointer;
+    user-select: none;
+    margin-bottom: 0;
+}
+
+.menu-more[open] summary.section-title {
+    margin-bottom: 10px;
+}
+
+.menu-more summary.section-title::after {
+    content: " ▾";
+    opacity: 0.7;
+    font-weight: 600;
+}
+
+.menu-more[open] summary.section-title::after {
+    content: " ▴";
+}
+
+/* móvil: más compacto */
+@media (max-width: 600px) {
+    .mode-compact-grid {
+        grid-template-columns: 1fr 1fr;
     }
-    .menu-sidebar-title{ display:none; }
-    .menu-nav-btn{ margin:0; flex:1; justify-content:center; }
+    .menu-section {
+        padding: 14px;
+    }
 }
 
-.filters-drop{
-    border: 1px solid rgba(255,255,255,0.10);
-    border-radius: 16px;
+
+/* ============================================================
+   Filtros desplegables (compacto)
+   ============================================================ */
+
+.filters-drop {
+    border: 1px solid rgba(0,0,0,0.08);
+    border-radius: 12px;
     padding: 10px 12px;
-    background: rgba(255,255,255,0.03);
-}
-.filters-summary{
-    list-style:none;
-    cursor:pointer;
-    font-weight:900;
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-}
-.filters-summary::-webkit-details-marker{ display:none; }
-.filters-summary::after{ content:"▾"; opacity:0.7; }
-.filters-drop[open] .filters-summary::after{ content:"▴"; }
-.filters-drop .filter-grid{ margin-top:12px; }
-
-
-/* ===== MENU READABILITY FIX (SAFE) ===== */
-/* Reduce visual noise without changing logic */
-
-.menu-cards {
-  gap: 14px;
+    background: rgba(0,0,0,0.02);
 }
 
-.menu-card,
-.mode-card,
-.card {
-  background: rgba(255,255,255,0.04) !important;
-  border: 1px solid rgba(255,255,255,0.12) !important;
+.filters-summary {
+    list-style: none;
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
 }
 
-.menu-card:hover,
-.mode-card:hover {
-  background: rgba(255,255,255,0.07) !important;
+.filters-summary::-webkit-details-marker {
+    display: none;
 }
 
-.menu-title {
-  font-weight: 900;
-  letter-spacing: 0.3px;
+.filters-summary::after {
+    content: "▾";
+    opacity: 0.7;
+    font-weight: 700;
 }
 
-.menu-sub {
-  opacity: 0.7;
+.filters-drop[open] .filters-summary::after {
+    content: "▴";
 }
 
-/* Keep filters compact */
-.filters-drop summary {
+.filters-drop .filter-grid {
+    margin-top: 12px;
+}
+
+/* En móvil: cerrado por defecto (si no hay preferencia guardada) */
+@media (max-width: 600px) {
+    .filters-drop {
+        padding: 8px 10px;
+    }
+    .filters-summary {
+        font-size: 13px;
+    }
+}
+
+
+/* ============================================================
+   Menú ULTRA PRO: pestañas + paneles
+   ============================================================ */
+.menu-tabs{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  margin: 12px 0 16px;
+}
+.tab-btn{
+  border:1px solid rgba(0,0,0,0.10);
+  background: rgba(0,0,0,0.03);
+  padding:10px 12px;
+  border-radius: 12px;
   font-weight: 800;
+  cursor:pointer;
+}
+.tab-btn.active{
+  border-color: rgba(0,0,0,0.22);
+  background: rgba(0,0,0,0.08);
+}
+.settings-actions{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
 }
 
-/* Mobile spacing */
-@media (max-width: 768px) {
-  .menu-cards {
-    grid-template-columns: 1fr;
-  }
+/* ============================================================
+   Shell simple (no rompe la app)
+   ============================================================ */
+.site-header{
+  position: sticky;
+  top:0;
+  z-index: 20;
+  padding: 14px 18px;
+  background: rgba(255,255,255,0.90);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(0,0,0,0.08);
 }
+.site-brand{display:flex;align-items:center;gap:12px;max-width:1100px;margin:0 auto;}
+.site-logo{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background: rgba(0,0,0,0.05);border:1px solid rgba(0,0,0,0.10);font-weight:900;}
+.site-title{font-weight:900;letter-spacing:0.2px;}
+.site-subtitle{font-size:12px;opacity:0.7;margin-top:2px;}
+.site-main{max-width:1100px;margin:0 auto;padding:16px;}
