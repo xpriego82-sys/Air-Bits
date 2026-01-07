@@ -840,3 +840,111 @@ body {
 .site-title{font-weight:900;letter-spacing:0.2px;}
 .site-subtitle{font-size:12px;opacity:0.7;margin-top:2px;}
 .site-main{max-width:1100px;margin:0 auto;padding:16px;}
+
+/* ============================================================
+   Menú pro (sidebar + contenido)
+   ============================================================ */
+.menu-layout{ display:grid; grid-template-columns: 240px 1fr; gap:14px; align-items:start; }
+.menu-sidebar{
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 16px;
+    padding: 14px;
+    position: sticky;
+    top: 12px;
+}
+.menu-sidebar-title{ font-weight: 900; margin-bottom: 10px; opacity: 0.9; }
+.menu-nav-btn{
+    width: 100%;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.04);
+    color: rgba(255,255,255,0.92);
+    cursor: pointer;
+    font-weight: 900;
+    margin-bottom: 10px;
+}
+.menu-nav-btn:hover{ background: rgba(255,255,255,0.06); }
+.menu-nav-btn.active{
+    border-color: rgba(110,168,255,0.45);
+    background: rgba(110,168,255,0.14);
+}
+.menu-nav-ic{ font-size: 18px; }
+.menu-sidebar-foot{ margin-top: 6px; }
+
+.menu-main{ display:flex; flex-direction:column; gap:14px; }
+.menu-head{ display:flex; align-items:flex-end; justify-content:space-between; gap:12px; }
+.menu-title{ font-size: 20px; font-weight: 950; }
+.menu-sub{ color: rgba(255,255,255,0.68); margin-top:4px; }
+.menu-head-actions{ display:flex; gap:10px; flex-wrap:wrap; }
+.menu-cards{ display:grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+
+@media (max-width: 900px){
+    .menu-layout{ grid-template-columns: 1fr; }
+    .menu-sidebar{ position: relative; top: 0; }
+}
+
+/* ============================================================
+   Feedback haptic visual (fallback iOS)
+   ============================================================ */
+.haptic-correct .app-header{ box-shadow: 0 0 0 2px rgba(124,255,178,0.28) inset; }
+.haptic-wrong .app-header{ box-shadow: 0 0 0 2px rgba(255,107,107,0.28) inset; }
+.haptic-correct .app-root,
+.haptic-wrong .app-root{ animation: hapticPulse 140ms ease-in-out 1; }
+@keyframes hapticPulse{ 0%{transform:translateY(0);} 50%{transform:translateY(-2px);} 100%{transform:translateY(0);} }
+
+/* ============================================================
+   Ultra pro navegación: bottom-nav móvil
+   ============================================================ */
+@media (max-width: 640px){
+  .menu-sidebar-title{ display:none; }
+  .menu-sidebar{
+    display:flex;
+    gap:10px;
+    padding: 10px;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  .menu-nav-btn{
+    margin: 0;
+    flex: 1;
+    justify-content: center;
+    padding: 10px;
+  }
+  .menu-nav-btn .menu-nav-ic{ font-size: 16px; }
+}
+
+/* CTA row */
+.menu-cta-row{
+  display:flex;
+  gap:10px;
+  flex-wrap: wrap;
+  align-items:center;
+}
+
+/* Avanzado */
+.advanced-drop{
+  margin-top: 10px;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 16px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.04);
+}
+.advanced-summary{
+  cursor: pointer;
+  user-select: none;
+  font-weight: 900;
+  opacity: 0.9;
+  list-style: none;
+  display:flex;
+  justify-content: space-between;
+  align-items:center;
+}
+.advanced-summary::-webkit-details-marker{ display:none; }
+.advanced-summary::after{ content:"▾"; opacity:0.7; }
+.advanced-drop[open] .advanced-summary::after{ content:"▴"; }
