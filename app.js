@@ -11,6 +11,14 @@ let filteredQuestions = [];
 let mode = null;
 let currentIndex = 0;
 
+let menuUI = { section: localStorage.getItem('airbits_menu_section') || 'study' };
+
+function setMenuSection(s) {
+    menuUI.section = s;
+    localStorage.setItem('airbits_menu_section', s);
+    showMenu();
+}
+
 let studySettings = { reviewRandom: true, examBalanced: true, examCount: 40 };
 
 // UI: pestañas del menú principal
@@ -79,10 +87,20 @@ function playWrong() {
 function vibrate(type) {
     if (!appSettings.vibrationEnabled) return;
 
+    // iOS Safari no soporta Vibration API. En ese caso usamos feedback visual.
     if (navigator.vibrate) {
         if (type === "correct") navigator.vibrate(40);
         if (type === "wrong") navigator.vibrate([60, 40, 60]);
+    } else {
+        visualHaptic(type);
     }
+}
+
+function visualHaptic(type) {
+    // Fallback (especialmente iOS): micro "pulse" visual
+    const cls = type === "wrong" ? "haptic-wrong" : "haptic-correct";
+    document.body.classList.add(cls);
+    setTimeout(() => document.body.classList.remove(cls), 140);
 }
 
 /* ----------------- USUARIOS ----------------- */
@@ -411,31 +429,173 @@ function uniqueOptions(arr) {
     return Array.from(set).sort();
 }
 
+
+function renderMenuSection() {
+    const last = (typeof loadLastSession === "function") ? loadLastSession() : null;
+    const continueBtn = (last && last.currentId)
+        ? `<button class="btn-primary" onclick="playClick(); resumeLastSession()">▶️ Continuar</button>`
+        : ``;
+
+    if (menuUI.section === "study") {
+        return `
+            <div class="menu-cta-row">
+                ${continueBtn}
+                <button class="btn-secondary" onclick="playClick(); startSmartMode()">🧠 Sesión inteligente</button>
+                <button class="btn-secondary" onclick="playClick(); startFlashcardMode()">🃏 Flashcards</button>
+            </div>
+
+            <div class="menu-cards">
+                ${createModeCard("🧠", "Inteligente", "SRS + falladas + nuevas (30Q)", "startSmartMode")}
+                ${createModeCard("🃏", "Flashcards", "Mostrar respuesta + autoevaluación", "startFlashcardMode")}
+                ${createModeCard("📘", "Repaso", "Recorre el pool filtrado", "startReviewMode")}
+                ${createModeCard("❌", "Falladas", "Solo tus errores", "startFailedMode")}
+                ${createModeCard("🚩", "Marcadas", "Solo flags", "startMarkedMode")}
+            </div>
+
+            <details class="advanced-drop">
+                <summary class="advanced-summary">Avanzado</summary>
+                <div class="menu-cards" style="margin-top:12px;">
+                    ${createModeCard("🛠", "Por sistema", "Entrena un sistema concreto", "startSystemDrillMode")}
+                    ${createModeCard("🔀", "Híbrido", "Nuevas + falladas + refuerzo", "startHybridMode")}
+                    ${createModeCard("🧠", "SRS", "Solo due (espaciado)", "startSrsMode")}
+                    ${createModeCard("⚡", "Rápido", "Cadencia alta", "startFastMode")}
+                    ${createModeCard("👆", "Swipe", "Desliza si la sabías", "startSwipeMode")}
+                </div>
+            </details>
+        `;
+    }
+
+    if (menuUI.section === "exam") {
+        return `
+            <div class="menu-cta-row">
+                ${continueBtn}
+                <button class="btn-secondary" onclick="playClick(); startExamMode()">📝 Examen</button>
+                <button class="btn-secondary" onclick="playClick(); startCompanyExamMode()">🏢 Compañía</button>
+            </div>
+
+            <div class="menu-cards">
+                ${createModeCard("📝", "Examen", "Configurable y balanceado", "startExamMode")}
+                ${createModeCard("🏢", "Compañía", "Sin feedback hasta el final", "startCompanyExamMode")}
+            </div>
+        `;
+    }
+
+    if (menuUI.section === "analytics") {
+        return `
+            <div class="menu-cta-row">
+                ${continueBtn}
+                <button class="btn-secondary" onclick="playClick(); showWeaknessAnalysis()">🩻 Debilidades</button>
+                <button class="btn-secondary" onclick="playClick(); showDashboard()">📊 Estadísticas</button>
+            </div>
+
+            <div class="menu-cards">
+                ${createModeCard("🩻", "Debilidades", "Mapa de puntos débiles", "showWeaknessAnalysis")}
+                ${createModeCard("📊", "Estadísticas", "Progreso global", "showDashboard")}
+            </div>
+        `;
+    }
+
+    return `
+        <div class="menu-cta-row">
+            ${continueBtn}
+            <button class="btn-secondary" onclick="playClick(); showUserManagement()">👤 Usuarios</button>
+            <button class="btn-secondary" onclick="playClick(); showQuestionBankSettings()">🗂️ Banco</button>
+        </div>
+
+        <div class="menu-cards">
+            ${createModeCard("👤", "Usuarios", "Crear / cambiar / exportar progreso", "showUserManagement")}
+            ${createModeCard("🗂️", "Banco", "Importar CSV y validar", "showQuestionBankSettings")}
+            ${createModeCard("⚙️", "Ajustes", "General, sonidos, vibración", "showSettings")}
+        </div>
+    `;
+}
+
+
+function resumeLastSession() {
+    const last = loadLastSession?.();
+    if (!last || !questions.length) {
+        alert("No hay sesión previa para continuar.");
+        return;
+    }
+
+    // Reusar lógica de reanudación: forzamos un re-import "virtual"
+    // (restauramos pool filtrado y modo)
+    if (last.filteredIds && last.filteredIds.length) {
+        const idSet = new Set(last.filteredIds.map(String));
+        filteredQuestions = questions.filter(q => idSet.has(String(q.ID)));
+    } else {
+        filteredQuestions = [...questions];
+    }
+
+    mode = last.mode || "review";
+
+    if (mode === "review") {
+        studySettings.reviewRandom = !!last.reviewRandom;
+        saveStudySettings?.();
+
+        if (studySettings.reviewRandom) {
+            reviewQueue = filteredQuestions.filter(q => String(q.ID) !== String(last.currentId));
+            shuffle(reviewQueue);
+            reviewCurrent = questions.find(q => String(q.ID) === String(last.currentId)) || null;
+            showQuestion();
+        } else {
+            currentIndex = Math.max(0, filteredQuestions.findIndex(q => String(q.ID) === String(last.currentId)));
+            showQuestion();
+        }
+        return;
+    }
+
+    if (mode === "flash") {
+        flashQueue = filteredQuestions.filter(q => String(q.ID) !== String(last.currentId));
+        shuffle(flashQueue);
+        flashCurrent = questions.find(q => String(q.ID) === String(last.currentId)) || null;
+        flashRevealed = false;
+        showFlashcard();
+        return;
+    }
+
+    // fallback
+    showMenu();
+}
+
+function resetFilters() {
+    currentFilters = { category: "", aircraft: "", system: "", subsystem: "", search: "" };
+    filteredQuestions = [...questions];
+    showMenu();
+}
+
 function applyFilters() {
     const cat = document.getElementById("filterCategory").value;
     const ac = document.getElementById("filterAircraft").value;
     const sys = document.getElementById("filterSystem").value;
-    const diff = document.getElementById("filterDifficulty").value;
-
+    const subsys = document.getElementById("filterSubSystem").value;
     const search = (document.getElementById("filterSearch")?.value || "").trim().toLowerCase();
+
     studySettings.reviewRandom = (document.getElementById("filterReviewRandom")?.value || "1") === "1";
     studySettings.examBalanced = (document.getElementById("filterExamBalanced")?.value || "1") === "1";
     studySettings.examCount = parseInt(document.getElementById("filterExamCount")?.value || "40", 10);
+    saveStudySettings?.();
 
+    currentFilters.category = cat;
+    currentFilters.aircraft = ac;
+    currentFilters.system = sys;
+    currentFilters.subsystem = subsys;
+    currentFilters.search = search;
 
     filteredQuestions = questions.filter(q => {
         if (cat && q.Category !== cat) return false;
         if (ac && q.Aircraft !== ac) return false;
         if (sys && q.System !== sys) return false;
-        if (diff && q.Difficulty !== diff) return false;
+        if (subsys && q.SubSystem !== subsys) return false;
+
         if (search) {
-            const blob = (q.Question + ' ' + q.OptionA + ' ' + q.OptionB + ' ' + q.OptionC + ' ' + q.OptionD).toLowerCase();
+            const blob = (q.Question + " " + q.OptionA + " " + q.OptionB + " " + q.OptionC + " " + q.OptionD).toLowerCase();
             if (!blob.includes(search)) return false;
         }
         return true;
     });
 
-    updateFilterInfo();
+    showMenu();
 }
 
 function updateFilterInfo() {
@@ -458,6 +618,9 @@ function showMenu() {
             <div class="card">
                 <h2>No hay preguntas cargadas</h2>
                 <p>Ve a Ajustes → Banco de preguntas para importar un CSV.</p>
+                <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;">
+                    <button class="btn-primary" onclick="playClick(); showSettings()">Abrir Ajustes</button>
+                </div>
             </div>
         `;
         return;
@@ -466,110 +629,151 @@ function showMenu() {
     const categories = uniqueOptions(questions.map(q => q.Category));
     const aircrafts = uniqueOptions(questions.map(q => q.Aircraft));
     const systems = uniqueOptions(questions.map(q => q.System));
-    const difficulties = uniqueOptions(questions.map(q => q.Difficulty));
+    const subsystems = uniqueOptions(questions.map(q => q.SubSystem));
 
     document.getElementById("app").innerHTML = `
-        <div class="card filter-panel">
-            <details class="filters-drop" open>
-                <summary class="filters-summary">Filtros</summary>
+        <div class="menu-layout">
 
-            <h2>Filtros</h2>
+            <aside class="menu-sidebar">
+                <div class="menu-sidebar-title">Menú</div>
 
-            <div class="filter-grid">
+                <button class="menu-nav-btn ${menuUI.section === "study" ? "active" : ""}" onclick="playClick(); setMenuSection('study')">
+                    <span class="menu-nav-ic">📚</span> Estudio
+                </button>
+                <button class="menu-nav-btn ${menuUI.section === "exam" ? "active" : ""}" onclick="playClick(); setMenuSection('exam')">
+                    <span class="menu-nav-ic">📝</span> Exámenes
+                </button>
+                <button class="menu-nav-btn ${menuUI.section === "analytics" ? "active" : ""}" onclick="playClick(); setMenuSection('analytics')">
+                    <span class="menu-nav-ic">📈</span> Análisis
+                </button>
+                <button class="menu-nav-btn ${menuUI.section === "settings" ? "active" : ""}" onclick="playClick(); setMenuSection('settings')">
+                    <span class="menu-nav-ic">⚙️</span> Ajustes
+                </button>
 
-                <div class="filter-item">
-                    <label>Buscar texto</label>
-                    <input type="text" id="filterSearch" placeholder="Ej: RAT, PTU, VLO..." />
+                <div class="menu-sidebar-foot">
+                    <button class="btn-secondary" onclick="playClick(); showSettings()">Ajustes completos</button>
+                </div>
+            </aside>
+
+            <section class="menu-main">
+
+                <div class="menu-head">
+                    <div>
+                        <div class="menu-title">${menuUI.section === "study" ? "Estudio" : menuUI.section === "exam" ? "Exámenes" : menuUI.section === "analytics" ? "Análisis" : "Ajustes"}</div>
+                        <div class="menu-sub">Pool actual: <strong>${filteredQuestions.length || questions.length}</strong> preguntas</div>
+                    </div>
+
+                    <div class="menu-head-actions">
+                        <button class="btn-secondary" onclick="playClick(); showUserManagement()">Usuarios</button>
+                        <button class="btn-secondary" onclick="playClick(); showQuestionBankSettings()">Banco</button>
+                    </div>
                 </div>
 
-                <div class="filter-item">
-                    <label>Repaso aleatorio</label>
-                    <select id="filterReviewRandom">
-                        <option value="1" selected>Sí</option>
-                        <option value="0">No</option>
-                    </select>
+                <div class="card filter-panel">
+                    <details class="filters-drop">
+                        <summary class="filters-summary">Filtros</summary>
+
+                        <div class="filter-grid">
+                            <div class="filter-item">
+                                <label>Categoría</label>
+                                <select id="filterCategory">
+                                    <option value="">Todas</option>
+                                    ${categories.map(c => `<option value="${c}">${c}</option>`).join("")}
+                                </select>
+                            </div>
+
+                            <div class="filter-item">
+                                <label>Aeronave</label>
+                                <select id="filterAircraft">
+                                    <option value="">Todas</option>
+                                    ${aircrafts.map(a => `<option value="${a}">${a}</option>`).join("")}
+                                </select>
+                            </div>
+
+                            <div class="filter-item">
+                                <label>Sistema</label>
+                                <select id="filterSystem">
+                                    <option value="">Todos</option>
+                                    ${systems.map(s => `<option value="${s}">${s}</option>`).join("")}
+                                </select>
+                            </div>
+
+                            <div class="filter-item">
+                                <label>Sub-sistema</label>
+                                <select id="filterSubSystem">
+                                    <option value="">Todos</option>
+                                    ${subsystems.map(s => `<option value="${s}">${s}</option>`).join("")}
+                                </select>
+                            </div>
+
+                            <div class="filter-item">
+                                <label>Buscar</label>
+                                <input type="text" id="filterSearch" placeholder="Ej: RAT, PTU, VLO..." />
+                            </div>
+
+                            <div class="filter-item">
+                                <label>Repaso aleatorio</label>
+                                <select id="filterReviewRandom">
+                                    <option value="1">Sí</option>
+                                    <option value="0">No</option>
+                                </select>
+                            </div>
+
+                            <div class="filter-item">
+                                <label>Examen balanceado</label>
+                                <select id="filterExamBalanced">
+                                    <option value="1">Sí</option>
+                                    <option value="0">No</option>
+                                </select>
+                            </div>
+
+                            <div class="filter-item">
+                                <label>Nº preguntas examen</label>
+                                <select id="filterExamCount">
+                                    <option value="20">20</option>
+                                    <option value="40">40</option>
+                                    <option value="60">60</option>
+                                    <option value="80">80</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+                            <button class="btn-primary" onclick="playClick(); applyFilters()">Aplicar filtros</button>
+                            <button class="btn-secondary" onclick="playClick(); resetFilters()">Reset</button>
+                        </div>
+                    </details>
                 </div>
 
-                <div class="filter-item">
-                    <label>Examen balanceado por sistema</label>
-                    <select id="filterExamBalanced">
-                        <option value="1" selected>Sí</option>
-                        <option value="0">No</option>
-                    </select>
-                </div>
+                ${renderMenuSection()}
 
-                <div class="filter-item">
-                    <label>Nº preguntas examen</label>
-                    <select id="filterExamCount">
-                        <option value="20">20</option>
-                        <option value="40" selected>40</option>
-                        <option value="60">60</option>
-                        <option value="80">80</option>
-                    </select>
-                </div>
-
-
-
-                <div class="filter-item">
-                    <label>Categoría</label>
-                    <select id="filterCategory">
-                        <option value="">Todas</option>
-                        ${categories.map(c => `<option value="${c}">${c}</option>`).join("")}
-                    </select>
-                </div>
-
-                <div class="filter-item">
-                    <label>Aeronave</label>
-                    <select id="filterAircraft">
-                        <option value="">Todas</option>
-                        ${aircrafts.map(c => `<option value="${c}">${c}</option>`).join("")}
-                    </select>
-                </div>
-
-                <div class="filter-item">
-                    <label>Sistema</label>
-                    <select id="filterSystem">
-                        <option value="">Todos</option>
-                        ${systems.map(c => `<option value="${c}">${c}</option>`).join("")}
-                    </select>
-                </div>
-
-                <div class="filter-item">
-                    <label>Dificultad</label>
-                    <select id="filterDifficulty">
-                        <option value="">Todas</option>
-                        ${difficulties.map(c => `<option value="${c}">${c}</option>`).join("")}
-                    </select>
-                </div>
-
-            </div>
-
-            <button class="btn-primary" onclick="playClick(); applyFilters()">Aplicar filtros</button>
-            <div class="info" id="filterInfo"></div>
-        </div>
-
-        <div class="card modes-grid">
-
-            ${createModeCard("📘", "Repaso", "Recorre todas las preguntas filtradas", "startReviewMode")}
-            ${createModeCard("🃏", "Flashcards", "Mostrar respuesta + autoevaluación", "startFlashcardMode")}
-            ${createModeCard("📝", "Examen", "Examen configurable balanceado", "startExamMode")}
-            ${createModeCard("🏢", "Compañía", "Sin feedback hasta el final", "startCompanyExamMode")}
-            ${createModeCard("❌", "Falladas", "Solo tus errores", "startFailedMode")}
-            ${createModeCard("🚩", "Marcadas", "Solo preguntas con flag", "startMarkedMode")}
-            ${createModeCard("🧠", "Inteligente", "Orden adaptativo según tu rendimiento", "startSmartMode")}
-            ${createModeCard("⚡", "Rápido", "Flashcards con repetición de fallos", "startFastMode")}
-            ${createModeCard("👆", "Swipe", "Desliza para marcar si la sabías", "startSwipeMode")}
-            ${createModeCard("🔀", "Híbrido", "Nuevas + falladas + refuerzo", "startHybridMode")}
-            ${createModeCard("🧠", "SRS", "Repetición espaciada real", "startSrsMode")}
-            ${createModeCard("🛠", "Por sistema", "Entrena un sistema concreto", "startSystemDrillMode")}
-            ${createModeCard("🩻", "Debilidades", "Tu mapa de puntos débiles", "showWeaknessAnalysis")}
-            ${createModeCard("📊", "Estadísticas", "Tu progreso global", "showDashboard")}
-
+            </section>
         </div>
     `;
 
-    updateFilterInfo();
+    const filtersDetails = document.querySelector(".filters-drop");
+    if (filtersDetails) {
+        const open = localStorage.getItem("airbits_filters_open");
+        if (open === "1") filtersDetails.open = true;
+        if (open === "0") filtersDetails.open = false;
+        if (open === null) filtersDetails.open = (window.innerWidth >= 900);
+
+        filtersDetails.addEventListener("toggle", () => {
+            localStorage.setItem("airbits_filters_open", filtersDetails.open ? "1" : "0");
+        });
+    }
+
+    document.getElementById("filterCategory").value = currentFilters.category || "";
+    document.getElementById("filterAircraft").value = currentFilters.aircraft || "";
+    document.getElementById("filterSystem").value = currentFilters.system || "";
+    document.getElementById("filterSubSystem").value = currentFilters.subsystem || "";
+    document.getElementById("filterSearch").value = currentFilters.search || "";
+
+    document.getElementById("filterReviewRandom").value = studySettings.reviewRandom ? "1" : "0";
+    document.getElementById("filterExamBalanced").value = studySettings.examBalanced ? "1" : "0";
+    document.getElementById("filterExamCount").value = String(studySettings.examCount || 40);
 }
+
 
 /* ============================================================
    Air&Bits — APP.JS (PARTE 3/6)
@@ -2160,3 +2364,40 @@ window.onload = () => {
     initApp();
 };
 function triggerCSVImport(){ const el=document.getElementById('csvFile'); if(el) el.click(); }
+
+
+// ============================================================
+// BOOTSTRAP SEGURO (iOS / GitHub Pages)
+// - No depende de initApp() (puede romper por cambios)
+// - Carga ajustes si existen y luego pinta menú
+// ============================================================
+document.addEventListener("DOMContentLoaded", () => {
+    try {
+        // Cargar settings si existen (sin romper)
+        if (typeof loadAppSettings === "function") loadAppSettings();
+        if (typeof loadStudySettings === "function") loadStudySettings();
+
+        // Si hay funciones auxiliares, actualiza UI de usuario
+        if (typeof updateCurrentUserInfo === "function") updateCurrentUserInfo();
+
+        // Pintar menú sí o sí
+        if (typeof showMenu === "function") {
+            showMenu();
+        } else {
+            throw new Error("showMenu() no está definida en app.js");
+        }
+    } catch (e) {
+        const root = document.getElementById("app");
+        if (root) {
+            root.innerHTML = `
+                <div class="card" style="max-width:860px;margin:18px auto;">
+                    <h2>⚠️ Error iniciando Air&Bits</h2>
+                    <p style="opacity:0.75;">Copia este error y pásamelo.</p>
+                    <pre style="white-space:pre-wrap;font-size:12px;overflow:auto;background:rgba(0,0,0,0.25);padding:12px;border-radius:12px;">${(e && (e.stack||e.message)) ? (e.stack||e.message) : String(e)}</pre>
+                </div>
+            `;
+        }
+        console.error(e);
+    }
+});
+
