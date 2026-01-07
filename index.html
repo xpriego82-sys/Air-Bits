@@ -1,48 +1,26 @@
 <!doctype html>
 <html lang="es">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Air&Bits – A330 Type Rating</title>
-  <link rel="stylesheet" href="style.css">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Air&Bits</title>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-
-<header class="app-header">
-  <div class="brand">
-    <div class="brand-icon">✈︎</div>
-    <div class="brand-text">
-      <div class="brand-title">Air&Bits</div>
-      <div class="brand-sub">A330 · Type Rating</div>
+  <header class="site-header">
+    <div class="site-brand">
+      <div class="site-logo">✈︎</div>
+      <div>
+        <div class="site-title">Air&Bits</div>
+        <div class="site-subtitle">Banco de preguntas · A330 Type Rating</div>
+      </div>
     </div>
-  </div>
-</header>
+  </header>
 
-<main class="app-main">
-  <div id="app" class="app-root"></div>
-</main>
+  <main class="site-main">
+    <div id="app"></div>
+  </main>
 
-<script src="app.js"></script>
-
-<!-- BOOTSTRAP SEGURO -->
-<script>
-document.addEventListener("DOMContentLoaded", () => {
-  try {
-    if (typeof initApp === "function") {
-      initApp();
-    } else if (typeof showMenu === "function") {
-      showMenu();
-    } else {
-      document.getElementById("app").innerHTML =
-        "<div style='color:white;padding:20px'>❌ No se encontró función de arranque</div>";
-    }
-  } catch (e) {
-    document.getElementById("app").innerHTML =
-      "<pre style='color:white;padding:20px'>" + e + "</pre>";
-    console.error(e);
-  }
-});
-</script>
-
+  <script src="app.js"></script>
 </body>
 </html>
