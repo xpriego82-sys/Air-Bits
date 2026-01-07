@@ -3,113 +3,24 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0B1220" />
-  <title>Air&Bits — A330 Type Rating</title>
+  <title>Air&Bits</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="page">
-    <header class="app-header">
-      <div class="brand">
-        <div class="brand-mark" aria-hidden="true">✈︎</div>
-        <div class="brand-text">
-          <div class="brand-title">Air&Bits</div>
-          <div class="brand-subtitle">A330 · Type Rating</div>
-        </div>
+  <header class="site-header">
+    <div class="site-brand">
+      <div class="site-logo">✈︎</div>
+      <div>
+        <div class="site-title">Air&Bits</div>
+        <div class="site-subtitle">Banco de preguntas · A330 Type Rating</div>
       </div>
+    </div>
+  </header>
 
-      <div class="header-actions">
-        <span class="pill" id="headerStatus">Listo</span>
-      </div>
-    </header>
-
-    <main class="app-main">
-      <div class="app-shell">
-        <aside class="shell-side">
-          <div class="side-card">
-            <div class="side-title">Sesión</div>
-            <div class="side-row">
-              <span class="dot"></span>
-              <span class="side-muted">Crea un usuario y carga un banco CSV.</span>
-            </div>
-            <div class="side-divider"></div>
-            <div class="side-kv">
-              <div class="kv">
-                <div class="kv-label">Modo</div>
-                <div class="kv-value" id="sideMode">Menú</div>
-              </div>
-              <div class="kv">
-                <div class="kv-label">Preguntas</div>
-                <div class="kv-value" id="sideCount">—</div>
-              </div>
-            </div>
-            <div class="side-hint">Tip: usa “Compañía” para simular examen real.</div>
-          </div>
-
-          <div class="side-card soft">
-            <div class="side-title">Atajos</div>
-            <div class="chips">
-              <button class="chip" type="button" onclick="document.querySelector('#fileInput')?.click()">Importar CSV</button>
-              <button class="chip" type="button" onclick="window.showUserManagement?.()">Usuarios</button>
-              <button class="chip" type="button" onclick="window.showMenu?.()">Inicio</button>
-            </div>
-            <input id="fileInput" type="file" accept=".csv" style="display:none" onchange="window.handleCSVImport?.(event)">
-          </div>
-        </aside>
-
-        <section class="shell-content">
-          <div id="app" class="app-root">
-            <div class="hero">
-              <div class="hero-card">
-                <div class="hero-title">Entrena como en compañía.</div>
-                <div class="hero-sub">
-                  Importa tu banco en CSV, crea un usuario y usa sesiones inteligentes, flashcards y exámenes.
-                </div>
-                <div class="hero-actions">
-                  <button class="btn-primary" type="button" onclick="document.querySelector('#fileInput')?.click()">Importar banco CSV</button>
-                  <button class="btn-secondary" type="button" onclick="window.showUserManagement?.()">Crear usuario</button>
-                </div>
-                <div class="hero-note">
-                  Todo se guarda localmente en tu dispositivo (sin cuentas ni servidores).
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-      </div>
-    </main>
-
-    <footer class="app-footer">
-      <div class="footer-left">Air&Bits · Offline-first</div>
-      <div class="footer-right">v1</div>
-    </footer>
-  </div>
+  <main class="site-main">
+    <div id="app"></div>
+  </main>
 
   <script src="app.js"></script>
-  <script>
-    // Mejoras cosméticas sin tocar la lógica de la app
-    (function() {
-      const updateSide = () => {
-        try {
-          const mode = window.mode || "menu";
-          const q = window.questions || [];
-          const map = {
-            menu: "Menú",
-            review: "Repaso",
-            exam: "Examen",
-            company: "Compañía",
-            smart: "Inteligente",
-            flash: "Flashcards",
-            srs: "SRS"
-          };
-          document.getElementById("sideMode").textContent = map[mode] || mode;
-          document.getElementById("sideCount").textContent = q.length ? String(q.length) : "—";
-          document.getElementById("headerStatus").textContent = q.length ? "Banco cargado" : "Listo";
-        } catch(e) {}
-      };
-      window.addEventListener("load", () => setTimeout(updateSide, 50));
-      setInterval(updateSide, 1000);
-    })();
-  </script>
 </body>
 </html>
