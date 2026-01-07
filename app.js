@@ -11,7 +11,32 @@ let filteredQuestions = [];
 let mode = null;
 let currentIndex = 0;
 
+let studySettings = { reviewRandom: true, examBalanced: true, examCount: 40 };
+
+// UI: pestañas del menú principal
+let menuTab = localStorage.getItem("airbits_menu_tab") || "study";
+function setMenuTab(tab) {
+    menuTab = tab;
+    localStorage.setItem("airbits_menu_tab", tab);
+    showMenu();
+}
+
+
+let reviewQueue = [];
+let reviewCurrent = null;
+
+let flashQueue = [];
+let flashCurrent = null;
+let flashRevealed = false;
+
+
 let examQuestions = [];
+
+let companyExamQuestions = [];
+let companyExamIndex = 0;
+let companyExamStartTime = null;
+let companyExamTimerInterval = null;
+
 let examIndex = 0;
 let examStartTime = null;
 let examTimerInterval = null;
@@ -125,20 +150,26 @@ function updateCurrentUserInfo() {
 
 /* ----------------- AJUSTES ----------------- */
 
-let menuUI = { section: localStorage.getItem('airbits_menu_section') || 'study' };
-
-function setMenuSection(s){
-    menuUI.section = s;
-    localStorage.setItem('airbits_menu_section', s);
-    showMenu();
-}
-
 let appSettings = {
     language: "es",
     soundsEnabled: true,
     vibrationEnabled: true,
     visualTheme: "airbus"
 };
+
+function loadStudySettings() {
+    const raw = localStorage.getItem("airbits_studysettings");
+    if (raw) {
+        try {
+            const obj = JSON.parse(raw);
+            studySettings = { ...studySettings, ...obj };
+        } catch (e) {}
+    }
+}
+
+function saveStudySettings() {
+    localStorage.setItem("airbits_studysettings", JSON.stringify(studySettings));
+}
 
 function loadAppSettings() {
     const raw = localStorage.getItem("airbits_settings");
@@ -160,40 +191,95 @@ function saveFastWeights() {
     localStorage.setItem("airbits_fastweights", JSON.stringify(fastWeights));
 }
 
-/* ----------------- PARSER CSV ----------------- */
-
-function parseCSV(text) {
-    const lines = text.split(/\r?\n/).filter(l => l.trim() !== "");
-    if (lines.length < 2) return [];
-
-    const headers = lines[0].split(",").map(h => h.trim());
-    const rows = [];
-
-    for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i].split(",");
-        if (cols.length !== headers.length) continue;
-
-        const obj = {};
-        headers.forEach((h, idx) => {
-            obj[h] = cols[idx].trim();
-        });
-
-        rows.push(obj);
-    }
-
-    return rows;
-}
-
 /* ----------------- UTILIDADES ----------------- */
 
+function getUserId() {
+    const data = loadUserData();
+    return data.currentUserId || null;
+}
+
+function getQKey(q) {
+    return String(q.ID || q.Question || "");
+}
+
+function getUserStatsObject() {
+    const data = loadUserData();
+    const uid = data.currentUserId;
+    if (!uid || !data.users[uid]) return null;
+    if (!data.users[uid].stats) data.users[uid].stats = {};
+    return { data, user: data.users[uid] };
+}
+
+function ensureQState(q) {
+    const wrap = getUserStatsObject();
+    if (!wrap) return null;
+    const key = getQKey(q);
+    if (!wrap.user.stats[key]) {
+        wrap.user.stats[key] = { correct: 0, wrong: 0, srsLevel: 0, srsNext: 0, flagged: false, lastSeen: null };
+        saveUserData(wrap.data);
+    }
+    return wrap.user.stats[key];
+}
+
+function getQState(q) {
+    const wrap = getUserStatsObject();
+    if (!wrap) return null;
+    const key = getQKey(q);
+    return wrap.user.stats[key] || null;
+}
+
+function setFlag(q, flagged) {
+    const wrap = getUserStatsObject();
+    if (!wrap) return;
+    const s = ensureQState(q);
+    s.flagged = !!flagged;
+    saveUserData(wrap.data);
+}
+
+function isFlagged(q) {
+    const s = getQState(q);
+    return !!(s && s.flagged);
+}
+
+function syncQuestionRuntimeState(q) {
+    const s = ensureQState(q);
+    if (!s) return;
+    q._wrongCount = s.wrong || 0;
+    q._correctCount = s.correct || 0;
+    q._srsLevel = s.srsLevel || 0;
+    q._srsNext = s.srsNext || 0;
+    q._flagged = !!s.flagged;
+}
+
+
 function shuffle(arr) {
-    return arr.sort(() => Math.random() - 0.5);
+    // Fisher–Yates (uniform)
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
 }
 
 function todayISO() {
     return new Date().toISOString().split("T")[0];
 }
 
+
+
+function saveLastSession(state) {
+    try { localStorage.setItem("airbits_lastsession", JSON.stringify(state)); } catch(e) {}
+}
+
+function loadLastSession() {
+    const raw = localStorage.getItem("airbits_lastsession");
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch(e) { return null; }
+}
+
+function clearLastSession() {
+    localStorage.removeItem("airbits_lastsession");
+}
 /* ============================================================
    Air&Bits — APP.JS (PARTE 2/6)
    Banco de preguntas, filtros, menú principal
@@ -242,9 +328,65 @@ function handleCSVImport(event) {
         }
 
         questions = parsed;
+        // Sincronizar estado persistente del usuario (fallos, SRS, flags)
+        questions.forEach(q => syncQuestionRuntimeState(q));
         filteredQuestions = [...questions];
 
-        alert("Banco de preguntas importado correctamente.");
+        // Reanudar sesión si existe
+        const last = loadLastSession();
+        if (last && last.bankSignature && last.bankSignature === String(questions.length)) {
+            const ok = confirm(`¿Continuar donde lo dejaste?
+Modo: ${last.mode}`);
+            if (ok) {
+                // Restaurar filtros básicos
+                if (last.filteredIds && last.filteredIds.length) {
+                    const idSet = new Set(last.filteredIds.map(String));
+                    filteredQuestions = questions.filter(q => idSet.has(String(q.ID)));
+                }
+                mode = last.mode;
+                if (mode === "review") {
+                    studySettings.reviewRandom = !!last.reviewRandom;
+                    saveStudySettings();
+                    if (studySettings.reviewRandom) {
+                        reviewQueue = filteredQuestions.filter(q => String(q.ID) !== String(last.currentId));
+                        shuffle(reviewQueue);
+                        reviewCurrent = questions.find(q => String(q.ID) === String(last.currentId)) || null;
+                        showQuestion();
+                    } else {
+                        currentIndex = Math.max(0, filteredQuestions.findIndex(q => String(q.ID) === String(last.currentId)));
+                        showQuestion();
+                    }
+                    showQuestionBankSettings();
+                    return;
+                }
+                if (mode === "flash") {
+                    flashQueue = filteredQuestions.filter(q => String(q.ID) !== String(last.currentId));
+                    shuffle(flashQueue);
+                    flashCurrent = questions.find(q => String(q.ID) === String(last.currentId)) || null;
+                    flashRevealed = false;
+                    showFlashcard();
+                    showQuestionBankSettings();
+                    return;
+                }
+            }
+        }
+        // Si no se reanuda, sigue normal
+        clearLastSession();
+
+        // Validación rápida del banco
+        const missingCorrect = questions.filter(q => !(q.CorrectAnswer || q.Correct || "").trim()).length;
+        const missingOpts = questions.filter(q => !q.OptionA || !q.OptionB || !q.OptionC || !q.OptionD).length;
+        const total = questions.length;
+
+        alert(
+            "Banco importado ✅\n\n" +
+            `Total: ${total}\n` +
+            `Sin CorrectAnswer: ${missingCorrect}\n` +
+            `Con opciones incompletas: ${missingOpts}`
+        );
+
+
+
         showQuestionBankSettings();
     };
 
@@ -269,27 +411,27 @@ function uniqueOptions(arr) {
     return Array.from(set).sort();
 }
 
-function resetFilters() {
-    currentFilters = { category: "", aircraft: "", system: "", difficulty: "" };
-    filteredQuestions = [...questions];
-}
-
 function applyFilters() {
     const cat = document.getElementById("filterCategory").value;
     const ac = document.getElementById("filterAircraft").value;
     const sys = document.getElementById("filterSystem").value;
     const diff = document.getElementById("filterDifficulty").value;
 
-    currentFilters.category = cat;
-    currentFilters.aircraft = ac;
-    currentFilters.system = sys;
-    currentFilters.difficulty = diff;
+    const search = (document.getElementById("filterSearch")?.value || "").trim().toLowerCase();
+    studySettings.reviewRandom = (document.getElementById("filterReviewRandom")?.value || "1") === "1";
+    studySettings.examBalanced = (document.getElementById("filterExamBalanced")?.value || "1") === "1";
+    studySettings.examCount = parseInt(document.getElementById("filterExamCount")?.value || "40", 10);
+
 
     filteredQuestions = questions.filter(q => {
         if (cat && q.Category !== cat) return false;
         if (ac && q.Aircraft !== ac) return false;
         if (sys && q.System !== sys) return false;
         if (diff && q.Difficulty !== diff) return false;
+        if (search) {
+            const blob = (q.Question + ' ' + q.OptionA + ' ' + q.OptionB + ' ' + q.OptionC + ' ' + q.OptionD).toLowerCase();
+            if (!blob.includes(search)) return false;
+        }
         return true;
     });
 
@@ -308,67 +450,6 @@ function updateFilterInfo() {
 
 /* ----------------- MENÚ PRINCIPAL ----------------- */
 
-
-function renderMenuSection() {
-    if (menuUI.section === "study") {
-        return `
-            <div class="menu-cta-row">
-                <button class="btn-primary" onclick="playClick(); startSmartMode()">🧠 Sesión inteligente</button>
-                <button class="btn-secondary" onclick="playClick(); startReviewMode()">📘 Repaso</button>
-                <button class="btn-secondary" onclick="playClick(); startFailedMode()">❌ Falladas</button>
-            </div>
-
-            <div class="menu-cards">
-                ${createModeCard("🧠", "Inteligente", "Orden adaptativo según tu rendimiento", "startSmartMode")}
-                ${createModeCard("📘", "Repaso", "Recorre todas las preguntas filtradas", "startReviewMode")}
-                ${createModeCard("❌", "Falladas", "Solo tus errores", "startFailedMode")}
-            </div>
-
-            <details class="advanced-drop">
-                <summary class="advanced-summary">Avanzado</summary>
-                <div class="menu-cards" style="margin-top:12px;">
-                    ${createModeCard("⚡", "Rápido", "Flashcards con repetición de fallos", "startFastMode")}
-                    ${createModeCard("👆", "Swipe", "Desliza para marcar si la sabías", "startSwipeMode")}
-                    ${createModeCard("🔀", "Híbrido", "Nuevas + falladas + refuerzo", "startHybridMode")}
-                    ${createModeCard("🧠", "SRS", "Repetición espaciada real", "startSrsMode")}
-                    ${createModeCard("🛠", "Por sistema", "Entrena un sistema concreto", "startSystemDrillMode")}
-                </div>
-            </details>
-        `;
-    }
-
-    if (menuUI.section === "exam") {
-        return `
-            <div class="menu-cta-row">
-                <button class="btn-primary" onclick="playClick(); startExamMode()">📝 Empezar examen</button>
-            </div>
-            <div class="menu-cards">
-                ${createModeCard("📝", "Examen", "40 preguntas aleatorias cronometradas", "startExamMode")}
-            </div>
-        `;
-    }
-
-    if (menuUI.section === "analytics") {
-        return `
-            <div class="menu-cta-row">
-                <button class="btn-secondary" onclick="playClick(); showWeaknessAnalysis()">🩻 Debilidades</button>
-                <button class="btn-secondary" onclick="playClick(); showDashboard()">📊 Estadísticas</button>
-            </div>
-            <div class="menu-cards">
-                ${createModeCard("🩻", "Debilidades", "Tu mapa de puntos débiles", "showWeaknessAnalysis")}
-                ${createModeCard("📊", "Estadísticas", "Tu progreso global", "showDashboard")}
-            </div>
-        `;
-    }
-
-    return `
-        <div class="menu-cta-row">
-            <button class="btn-secondary" onclick="playClick(); showUserManagement()">👤 Usuarios</button>
-            <button class="btn-secondary" onclick="playClick(); showQuestionBankSettings()">🗂️ Banco</button>
-        </div>
-    `;
-}
-
 function showMenu() {
     mode = "menu";
 
@@ -382,126 +463,110 @@ function showMenu() {
         return;
     }
 
-    // Preparar valores de filtros
     const categories = uniqueOptions(questions.map(q => q.Category));
     const aircrafts = uniqueOptions(questions.map(q => q.Aircraft));
     const systems = uniqueOptions(questions.map(q => q.System));
-    const diffs = uniqueOptions(questions.map(q => q.Difficulty));
-
-    // Si aún no hay pool filtrado, usa todo
-    if (!filteredQuestions || !filteredQuestions.length) filteredQuestions = [...questions];
+    const difficulties = uniqueOptions(questions.map(q => q.Difficulty));
 
     document.getElementById("app").innerHTML = `
-        <div class="menu-layout">
-            <aside class="menu-sidebar">
-                <div class="menu-sidebar-title">Menú</div>
+        <div class="card filter-panel">
+            <details class="filters-drop" open>
+                <summary class="filters-summary">Filtros</summary>
 
-                <button class="menu-nav-btn ${menuUI.section === "study" ? "active" : ""}" onclick="playClick(); setMenuSection('study')">
-                    <span class="menu-nav-ic">📚</span> Estudio
-                </button>
+            <h2>Filtros</h2>
 
-                <button class="menu-nav-btn ${menuUI.section === "exam" ? "active" : ""}" onclick="playClick(); setMenuSection('exam')">
-                    <span class="menu-nav-ic">📝</span> Examen
-                </button>
+            <div class="filter-grid">
 
-                <button class="menu-nav-btn ${menuUI.section === "analytics" ? "active" : ""}" onclick="playClick(); setMenuSection('analytics')">
-                    <span class="menu-nav-ic">📈</span> Análisis
-                </button>
-
-                <button class="menu-nav-btn ${menuUI.section === "settings" ? "active" : ""}" onclick="playClick(); setMenuSection('settings')">
-                    <span class="menu-nav-ic">⚙️</span> Ajustes
-                </button>
-
-                <div class="menu-sidebar-foot">
-                    <button class="btn-secondary" onclick="playClick(); showUserManagement()">Usuarios</button>
-                    <button class="btn-secondary" onclick="playClick(); showQuestionBankSettings()">Banco</button>
-                </div>
-            </aside>
-
-            <section class="menu-main">
-                <div class="menu-head">
-                    <div>
-                        <div class="menu-title">${menuUI.section === "study" ? "Estudio" : menuUI.section === "exam" ? "Examen" : menuUI.section === "analytics" ? "Análisis" : "Ajustes"}</div>
-                        <div class="menu-sub">Pool actual: <strong>${filteredQuestions.length}</strong> preguntas</div>
-                    </div>
+                <div class="filter-item">
+                    <label>Buscar texto</label>
+                    <input type="text" id="filterSearch" placeholder="Ej: RAT, PTU, VLO..." />
                 </div>
 
-                <div class="card filter-panel">
-                    <details class="filters-drop">
-                        <summary class="filters-summary">Filtros</summary>
-
-                        <div class="filter-grid">
-                            <div class="filter-item">
-                                <label>Categoría</label>
-                                <select id="filterCategory">
-                                    <option value="">Todas</option>
-                                    ${categories.map(c => `<option value="${c}">${c}</option>`).join("")}
-                                </select>
-                            </div>
-
-                            <div class="filter-item">
-                                <label>Aeronave</label>
-                                <select id="filterAircraft">
-                                    <option value="">Todas</option>
-                                    ${aircrafts.map(a => `<option value="${a}">${a}</option>`).join("")}
-                                </select>
-                            </div>
-
-                            <div class="filter-item">
-                                <label>Sistema</label>
-                                <select id="filterSystem">
-                                    <option value="">Todos</option>
-                                    ${systems.map(s => `<option value="${s}">${s}</option>`).join("")}
-                                </select>
-                            </div>
-
-                            <div class="filter-item">
-                                <label>Dificultad</label>
-                                <select id="filterDifficulty">
-                                    <option value="">Todas</option>
-                                    ${diffs.map(d => `<option value="${d}">${d}</option>`).join("")}
-                                </select>
-                            </div>
-                        </div>
-
-                        <div class="menu-cta-row" style="margin-top:12px;">
-                            <button class="btn-primary" onclick="playClick(); applyFilters(); showMenu();">Aplicar</button>
-                            <button class="btn-secondary" onclick="playClick(); resetFilters();">Reset</button>
-                            <div class="info" id="filterInfo"></div>
-                        </div>
-                    </details>
+                <div class="filter-item">
+                    <label>Repaso aleatorio</label>
+                    <select id="filterReviewRandom">
+                        <option value="1" selected>Sí</option>
+                        <option value="0">No</option>
+                    </select>
                 </div>
 
-                ${menuUI.section === "settings" ? `
-                    <div class="menu-cards">
-                        ${createModeCard("👤", "Usuarios", "Crear / cambiar usuario", "showUserManagement")}
-                        ${createModeCard("🗂️", "Banco", "Importar CSV y validar", "showQuestionBankSettings")}
-                        ${createModeCard("⚙️", "Ajustes", "Sonido, vibración, etc.", "showSettings")}
-                    </div>
-                ` : renderMenuSection()}
+                <div class="filter-item">
+                    <label>Examen balanceado por sistema</label>
+                    <select id="filterExamBalanced">
+                        <option value="1" selected>Sí</option>
+                        <option value="0">No</option>
+                    </select>
+                </div>
 
-            </section>
+                <div class="filter-item">
+                    <label>Nº preguntas examen</label>
+                    <select id="filterExamCount">
+                        <option value="20">20</option>
+                        <option value="40" selected>40</option>
+                        <option value="60">60</option>
+                        <option value="80">80</option>
+                    </select>
+                </div>
+
+
+
+                <div class="filter-item">
+                    <label>Categoría</label>
+                    <select id="filterCategory">
+                        <option value="">Todas</option>
+                        ${categories.map(c => `<option value="${c}">${c}</option>`).join("")}
+                    </select>
+                </div>
+
+                <div class="filter-item">
+                    <label>Aeronave</label>
+                    <select id="filterAircraft">
+                        <option value="">Todas</option>
+                        ${aircrafts.map(c => `<option value="${c}">${c}</option>`).join("")}
+                    </select>
+                </div>
+
+                <div class="filter-item">
+                    <label>Sistema</label>
+                    <select id="filterSystem">
+                        <option value="">Todos</option>
+                        ${systems.map(c => `<option value="${c}">${c}</option>`).join("")}
+                    </select>
+                </div>
+
+                <div class="filter-item">
+                    <label>Dificultad</label>
+                    <select id="filterDifficulty">
+                        <option value="">Todas</option>
+                        ${difficulties.map(c => `<option value="${c}">${c}</option>`).join("")}
+                    </select>
+                </div>
+
+            </div>
+
+            <button class="btn-primary" onclick="playClick(); applyFilters()">Aplicar filtros</button>
+            <div class="info" id="filterInfo"></div>
+        </div>
+
+        <div class="card modes-grid">
+
+            ${createModeCard("📘", "Repaso", "Recorre todas las preguntas filtradas", "startReviewMode")}
+            ${createModeCard("🃏", "Flashcards", "Mostrar respuesta + autoevaluación", "startFlashcardMode")}
+            ${createModeCard("📝", "Examen", "Examen configurable balanceado", "startExamMode")}
+            ${createModeCard("🏢", "Compañía", "Sin feedback hasta el final", "startCompanyExamMode")}
+            ${createModeCard("❌", "Falladas", "Solo tus errores", "startFailedMode")}
+            ${createModeCard("🚩", "Marcadas", "Solo preguntas con flag", "startMarkedMode")}
+            ${createModeCard("🧠", "Inteligente", "Orden adaptativo según tu rendimiento", "startSmartMode")}
+            ${createModeCard("⚡", "Rápido", "Flashcards con repetición de fallos", "startFastMode")}
+            ${createModeCard("👆", "Swipe", "Desliza para marcar si la sabías", "startSwipeMode")}
+            ${createModeCard("🔀", "Híbrido", "Nuevas + falladas + refuerzo", "startHybridMode")}
+            ${createModeCard("🧠", "SRS", "Repetición espaciada real", "startSrsMode")}
+            ${createModeCard("🛠", "Por sistema", "Entrena un sistema concreto", "startSystemDrillMode")}
+            ${createModeCard("🩻", "Debilidades", "Tu mapa de puntos débiles", "showWeaknessAnalysis")}
+            ${createModeCard("📊", "Estadísticas", "Tu progreso global", "showDashboard")}
+
         </div>
     `;
-
-    // Restaurar valores actuales de filtros (si existen variables globales)
-    document.getElementById("filterCategory").value = currentFilters?.category || "";
-    document.getElementById("filterAircraft").value = currentFilters?.aircraft || "";
-    document.getElementById("filterSystem").value = currentFilters?.system || "";
-    document.getElementById("filterDifficulty").value = currentFilters?.difficulty || "";
-
-    // Estado del dropdown (recuerda abierto/cerrado)
-    const filtersDetails = document.querySelector(".filters-drop");
-    if (filtersDetails) {
-        const open = localStorage.getItem("airbits_filters_open");
-        if (open === "1") filtersDetails.open = true;
-        if (open === "0") filtersDetails.open = false;
-        if (open === null) filtersDetails.open = (window.innerWidth >= 900);
-
-        filtersDetails.addEventListener("toggle", () => {
-            localStorage.setItem("airbits_filters_open", filtersDetails.open ? "1" : "0");
-        });
-    }
 
     updateFilterInfo();
 }
@@ -535,8 +600,18 @@ function createOption(letter, text) {
 
 /* ----------------- MOSTRAR PREGUNTA ----------------- */
 
+function nextReviewQuestion() {
+    if (!reviewQueue.length) {
+        alert("Has completado el repaso.");
+        showMenu();
+        return;
+    }
+    reviewCurrent = reviewQueue.pop();
+    showQuestion();
+}
+
 function showQuestion() {
-    const q = filteredQuestions[currentIndex];
+    const q = (mode === "review" && studySettings.reviewRandom) ? reviewCurrent : filteredQuestions[currentIndex];
     if (!q) {
         showMenu();
         return;
@@ -545,7 +620,7 @@ function showQuestion() {
     document.getElementById("app").innerHTML = `
         <div class="card question-card">
 
-            <div class="q-meta">${q.Category || ""} • ${q.Aircraft || ""} • ${q.System || ""}</div>
+            <div class="q-meta">${q.Category || ""} • ${q.Aircraft || ""} • ${q.System || ""} ${q._flagged ? " <span style=\"color:#d32f2f;font-weight:700;\">🚩 MARCADA</span>" : ""}</div>
 
             <div class="question-text">${q.Question}</div>
 
@@ -558,9 +633,16 @@ function showQuestion() {
 
             <div id="feedback" class="feedback-area"></div>
 
+            <div class="options" style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+                <button class="btn-secondary" onclick="playClick(); toggleFlagCurrent()">🚩 Marcar / Desmarcar</button>
+                <button class="btn-secondary" onclick="playClick(); skipQuestion()">⏭️ Saltar</button>
+            </div>
+
             <button class="btn-secondary" onclick="playClick(); showMenu()">Volver</button>
         </div>
     `;
+
+    snapshotSession();
 }
 
 /* ----------------- MODO REPASO ----------------- */
@@ -573,19 +655,305 @@ function startReviewMode() {
 
     mode = "review";
     currentIndex = 0;
+
+    if (studySettings.reviewRandom) {
+        reviewQueue = [...filteredQuestions];
+        shuffle(reviewQueue);
+        reviewCurrent = null;
+        nextReviewQuestion();
+    } else {
+        reviewQueue = [];
+        reviewCurrent = null;
+        showQuestion();
+    }
+}
+
+/* ----------------- MODO FLASHCARDS ----------------- */
+
+function startFlashcardMode() {
+    if (!filteredQuestions.length) {
+        alert("No hay preguntas filtradas.");
+        return;
+    }
+    mode = "flash";
+    flashQueue = [...filteredQuestions];
+    shuffle(flashQueue);
+    nextFlashcard();
+}
+
+function nextFlashcard() {
+    if (!flashQueue.length) {
+        alert("Flashcards completadas.");
+        showMenu();
+        return;
+    }
+    flashCurrent = flashQueue.pop();
+    flashRevealed = false;
+    showFlashcard();
+}
+
+function showFlashcard() {
+    const q = flashCurrent;
+    if (!q) return showMenu();
+
+    document.getElementById("app").innerHTML = `
+        <div class="card question-card">
+            <div class="q-meta">${q.Category || ""} • ${q.Aircraft || ""} • ${q.System || ""}</div>
+            <div class="question-text">${q.Question}</div>
+
+            <div class="options modern-options" style="display:${flashRevealed ? "block" : "none"};">
+                ${createOption("A", q.OptionA)}
+                ${createOption("B", q.OptionB)}
+                ${createOption("C", q.OptionC)}
+                ${createOption("D", q.OptionD)}
+            </div>
+
+            <div id="feedback" class="feedback-area"></div>
+
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+                <button class="btn-primary" onclick="playClick(); revealFlashcard()">👁️ Mostrar respuesta</button>
+                <button class="btn-secondary" onclick="playClick(); gradeFlashcard(true)">👍 La sabía</button>
+                <button class="btn-secondary" onclick="playClick(); gradeFlashcard(false)">👎 No la sabía</button>
+                <button class="btn-secondary" onclick="playClick(); toggleFlagCurrent()">🚩 Marcar</button>
+                <button class="btn-secondary" onclick="playClick(); nextFlashcard()">⏭️ Siguiente</button>
+                <button class="btn-secondary" onclick="playClick(); showMenu()">Volver</button>
+            </div>
+        </div>
+    `;
+
+    snapshotSession();
+}
+
+function revealFlashcard() {
+    flashRevealed = true;
+    showFlashcard();
+    const q = flashCurrent;
+    const correct = (q.CorrectAnswer || q.Correct || "").trim().toUpperCase();
+    try { highlightCorrectOption(correct); } catch(e) {}
+}
+
+function gradeFlashcard(knewIt) {
+    const q = flashCurrent;
+    if (!q) return;
+    if (!knewIt) {
+        q._wrongCount = (q._wrongCount || 0) + 1;
+        updateStats(q, false);
+        updateSrs(q, false);
+    } else {
+        updateStats(q, true);
+        updateSrs(q, true);
+    }
+    nextFlashcard();
+}
+
+/* ----------------- MODO COMPAÑÍA (SIN FEEDBACK) ----------------- */
+
+function startCompanyExamMode() {
+    const n = studySettings.examCount || 40;
+
+    if (filteredQuestions.length < n) {
+        alert(`Necesitas al menos ${n} preguntas filtradas.`);
+        return;
+    }
+
+    mode = "company";
+    companyExamQuestions = (studySettings.examBalanced)
+        ? buildBalancedExam(filteredQuestions, n)
+        : shuffle([...filteredQuestions]).slice(0, n);
+
+    companyExamQuestions.forEach(q => { q._companyAnswer = null; q._correct = false; });
+
+    companyExamIndex = 0;
+    companyExamStartTime = Date.now();
+
+    startCompanyExamTimer();
+    showCompanyExamQuestion();
+}
+
+function startCompanyExamTimer() {
+    const timerEl = document.getElementById("timer");
+    if (!timerEl) return;
+
+    clearInterval(companyExamTimerInterval);
+    companyExamTimerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - companyExamStartTime) / 1000);
+        const min = Math.floor(elapsed / 60);
+        const sec = elapsed % 60;
+        timerEl.textContent = `${min}:${sec.toString().padStart(2, "0")}`;
+    }, 1000);
+}
+
+function showCompanyExamQuestion() {
+    const q = companyExamQuestions[companyExamIndex];
+    if (!q) return finishCompanyExam();
+
+    document.getElementById("app").innerHTML = `
+        <div class="card question-card">
+            <div class="q-meta">Compañía • Pregunta ${companyExamIndex + 1} / ${companyExamQuestions.length} ${q._flagged ? " <span style=\"color:#d32f2f;font-weight:700;\">🚩 MARCADA</span>" : ""}</div>
+
+            <div class="question-text">${q.Question}</div>
+
+            <div class="options modern-options">
+                <button onclick="playClick(); companySelect('A')"><span class="opt-letter">A</span><span>${q.OptionA}</span></button>
+                <button onclick="playClick(); companySelect('B')"><span class="opt-letter">B</span><span>${q.OptionB}</span></button>
+                <button onclick="playClick(); companySelect('C')"><span class="opt-letter">C</span><span>${q.OptionC}</span></button>
+                <button onclick="playClick(); companySelect('D')"><span class="opt-letter">D</span><span>${q.OptionD}</span></button>
+            </div>
+
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+                <button class="btn-secondary" onclick="playClick(); toggleFlagCurrent()">🚩 Marcar / Desmarcar</button>
+                <button class="btn-secondary" onclick="playClick(); companySkip()">⏭️ Saltar</button>
+            </div>
+        </div>
+    `;
+
+    snapshotSession();
+}
+
+function companySelect(letter) {
+    const q = companyExamQuestions[companyExamIndex];
+    if (!q) return;
+
+    q._companyAnswer = letter;
+
+    // Guardar stats solo al final (simula examen real), pero sí guardamos lastSeen
+    updateStats(q, true); // cuenta intento diario (sin sumar correct/wrong aquí de forma estricta)
+    // Revertir el incremento para no contaminar stats: dejamos solo lastSeen/daily progress
+    const wrap = getUserStatsObject();
+    if (wrap) {
+        const key = getQKey(q);
+        if (wrap.user.stats[key]) {
+            wrap.user.stats[key].correct = wrap.user.stats[key].correct || 0;
+            wrap.user.stats[key].wrong = wrap.user.stats[key].wrong || 0;
+            saveUserData(wrap.data);
+        }
+    }
+
+    companyExamIndex++;
+    showCompanyExamQuestion();
+}
+
+function companySkip() {
+    companyExamIndex++;
+    showCompanyExamQuestion();
+}
+
+function finishCompanyExam() {
+    clearInterval(companyExamTimerInterval);
+
+    // Corrección
+    companyExamQuestions.forEach(q => {
+        const correct = (q.CorrectAnswer || q.Correct || "").trim().toUpperCase();
+        q._correct = q._companyAnswer && q._companyAnswer === correct;
+
+        // Actualizar stats reales ahora
+        if (q._companyAnswer) {
+            updateStats(q, q._correct);
+            updateSrs(q, q._correct);
+        }
+    });
+
+    const correctN = companyExamQuestions.filter(q => q._correct).length;
+    const total = companyExamQuestions.length;
+    const percent = Math.round((correctN / total) * 100);
+
+    const wrongQs = companyExamQuestions.filter(q => !q._correct);
+
+    document.getElementById("app").innerHTML = `
+        <div class="card exam-result">
+            <h2>🏢 Examen Compañía finalizado</h2>
+            <div class="result-number">${percent}%</div>
+
+            <div class="result-details">
+                <p><strong>Correctas:</strong> ${correctN} / ${total}</p>
+                <p><strong>Falladas:</strong> ${total - correctN}</p>
+            </div>
+
+            <div style="margin-top:16px; text-align:left;">
+                <h3 style="margin-bottom:8px;">Revisar fallos</h3>
+                ${wrongQs.length ? wrongQs.map((q, i) => `
+                    <div style="padding:10px; border:1px solid rgba(0,0,0,0.1); border-radius:10px; margin-bottom:10px;">
+                        <div style="font-size:13px; opacity:0.7;">${q.System || "Otros"} • ID ${q.ID}</div>
+                        <div style="margin:6px 0; font-weight:600;">${q.Question}</div>
+                        <div style="font-size:14px; margin:6px 0;">
+                            <strong>Tu respuesta:</strong> ${q._companyAnswer || "(sin responder)"} • 
+                            <strong>Correcta:</strong> ${(q.CorrectAnswer || q.Correct || "").trim().toUpperCase()}
+                        </div>
+                        <button class="btn-secondary" onclick="playClick(); reviewCompanyWrong(${i})">Revisar</button>
+                    </div>
+                `).join("") : "<p>✅ No hay fallos.</p>"}
+            </div>
+
+            <button class="btn-primary" onclick="playClick(); showMenu()">Volver al menú</button>
+        </div>
+    `;
+
+    clearLastSession();
+}
+
+function reviewCompanyWrong(i) {
+    const wrongQs = companyExamQuestions.filter(q => !q._correct);
+    const q = wrongQs[i];
+    if (!q) return showMenu();
+
+    mode = "review";
+    studySettings.reviewRandom = false;
+    saveStudySettings();
+
+    filteredQuestions = wrongQs;
+    currentIndex = i;
     showQuestion();
 }
 
 /* ----------------- MODO EXAMEN ----------------- */
 
+function buildBalancedExam(pool, n) {
+    const groups = {};
+    pool.forEach(q => {
+        const k = (q.System || "Otros").trim() || "Otros";
+        if (!groups[k]) groups[k] = [];
+        groups[k].push(q);
+    });
+
+    const systems = Object.keys(groups);
+    systems.forEach(s => shuffle(groups[s]));
+
+    const result = [];
+    while (result.length < n) {
+        let added = false;
+        for (const s of systems) {
+            if (result.length >= n) break;
+            if (groups[s].length) {
+                result.push(groups[s].pop());
+                added = true;
+            }
+        }
+        if (!added) break;
+    }
+
+    if (result.length < n) {
+        const remaining = [];
+        systems.forEach(s => remaining.push(...groups[s]));
+        shuffle(remaining);
+        result.push(...remaining.slice(0, n - result.length));
+    }
+    return result.slice(0, n);
+}
+
 function startExamMode() {
-    if (filteredQuestions.length < 40) {
-        alert("Necesitas al menos 40 preguntas filtradas.");
+    const n = studySettings.examCount || 40;
+
+    if (filteredQuestions.length < n) {
+        alert(`Necesitas al menos ${n} preguntas filtradas.`);
         return;
     }
 
     mode = "exam";
-    examQuestions = shuffle([...filteredQuestions]).slice(0, 40);
+    if (studySettings.examBalanced) {
+        examQuestions = buildBalancedExam(filteredQuestions, studySettings.examCount || 40);
+    } else {
+        examQuestions = shuffle([...filteredQuestions]).slice(0, studySettings.examCount || 40);
+    }
     examIndex = 0;
     examStartTime = Date.now();
 
@@ -611,7 +979,7 @@ function showExamQuestion() {
     document.getElementById("app").innerHTML = `
         <div class="card question-card">
 
-            <div class="q-meta">Pregunta ${examIndex + 1} / 40</div>
+            <div class="q-meta">Pregunta ${examIndex + 1} / ${examQuestions.length} ${q._flagged ? " <span style=\"color:#d32f2f;font-weight:700;\">🚩 MARCADA</span>" : ""}</div>
 
             <div class="question-text">${q.Question}</div>
 
@@ -623,8 +991,15 @@ function showExamQuestion() {
             </div>
 
             <div id="feedback" class="feedback-area"></div>
+
+            <div class="options" style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+                <button class="btn-secondary" onclick="playClick(); toggleFlagCurrent()">🚩 Marcar / Desmarcar</button>
+                <button class="btn-secondary" onclick="playClick(); skipQuestion()">⏭️ Saltar</button>
+            </div>
         </div>
     `;
+
+    snapshotSession();
 }
 
 function finishExam() {
@@ -634,9 +1009,10 @@ function finishExam() {
     const total = examQuestions.length;
     const percent = Math.round((correct / total) * 100);
 
+    const wrongQs = examQuestions.filter(q => !q._correct);
+
     document.getElementById("app").innerHTML = `
         <div class="card exam-result">
-
             <h2>📝 Examen finalizado</h2>
 
             <div class="result-number">${percent}%</div>
@@ -646,10 +1022,37 @@ function finishExam() {
                 <p><strong>Falladas:</strong> ${total - correct}</p>
             </div>
 
+            <div style="margin-top:16px; text-align:left;">
+                <h3 style="margin-bottom:8px;">Revisar fallos</h3>
+                ${wrongQs.length ? wrongQs.map((q, i) => `
+                    <div style="padding:10px; border:1px solid rgba(0,0,0,0.1); border-radius:10px; margin-bottom:10px;">
+                        <div style="font-size:13px; opacity:0.7;">${q.System || "Otros"} • ID ${q.ID}</div>
+                        <div style="margin:6px 0; font-weight:600;">${q.Question}</div>
+                        <button class="btn-secondary" onclick="playClick(); reviewSingleWrong(${i})">Revisar</button>
+                    </div>
+                `).join("") : "<p>✅ No hay fallos.</p>"}
+            </div>
+
             <button class="btn-primary" onclick="playClick(); showMenu()">Volver al menú</button>
         </div>
     `;
 }
+
+function reviewSingleWrong(i) {
+    const wrongQs = examQuestions.filter(q => !q._correct);
+    const q = wrongQs[i];
+    if (!q) return showMenu();
+
+    // Revisión como repaso (no cuenta como examen)
+    mode = "review";
+    studySettings.reviewRandom = false;
+    saveStudySettings();
+
+    filteredQuestions = wrongQs;
+    currentIndex = i;
+    showQuestion();
+}
+
 
 /* ----------------- MODO FALLADAS ----------------- */
 
@@ -667,7 +1070,71 @@ function startFailedMode() {
     showQuestion();
 }
 
+/* ----------------- MODO MARCADAS ----------------- */
+
+function startMarkedMode() {
+    const marked = filteredQuestions.filter(q => isFlagged(q));
+    if (!marked.length) {
+        alert("No tienes preguntas marcadas.");
+        return;
+    }
+    filteredQuestions = marked;
+    mode = "review";
+    currentIndex = 0;
+
+    if (studySettings.reviewRandom) {
+        reviewQueue = [...filteredQuestions];
+        shuffle(reviewQueue);
+        reviewCurrent = null;
+        nextReviewQuestion();
+    } else {
+        showQuestion();
+    }
+}
+
 /* ----------------- MODO INTELIGENTE ----------------- */
+
+function buildSmartSession(pool, n) {
+    // Prioridad: SRS due > falladas > nuevas > resto
+    const now = Date.now();
+    const due = [];
+    const wrong = [];
+    const fresh = [];
+    const rest = [];
+
+    pool.forEach(q => {
+        const s = getQState(q);
+        const seen = s && (s.correct + s.wrong) > 0;
+        const isDue = s && s.srsNext && now >= s.srsNext;
+        const w = (s && s.wrong) || 0;
+
+        if (isDue) due.push(q);
+        else if (w > 0) wrong.push(q);
+        else if (!seen) fresh.push(q);
+        else rest.push(q);
+    });
+
+    shuffle(due);
+    shuffle(wrong);
+    shuffle(fresh);
+    shuffle(rest);
+
+    const result = [];
+    const take = (arr, k) => { while (arr.length && result.length < n && k-- > 0) result.push(arr.pop()); };
+
+    // mix típico: 40% due, 30% wrong, 20% fresh, 10% rest
+    take(due, Math.ceil(n * 0.4));
+    take(wrong, Math.ceil(n * 0.3));
+    take(fresh, Math.ceil(n * 0.2));
+    take(rest, n);
+
+    // si aún falta, rellena con lo que quede
+    const remaining = [...due, ...wrong, ...fresh, ...rest];
+    shuffle(remaining);
+    while (result.length < n && remaining.length) result.push(remaining.pop());
+
+    return result.slice(0, n);
+}
 
 function startSmartMode() {
     if (!filteredQuestions.length) {
@@ -675,15 +1142,21 @@ function startSmartMode() {
         return;
     }
 
-    filteredQuestions.sort((a, b) => {
-        const wa = a._wrongCount || 0;
-        const wb = b._wrongCount || 0;
-        return wb - wa;
-    });
-
     mode = "review";
     currentIndex = 0;
-    showQuestion();
+
+    // Tamaño de sesión inteligente
+    const n = Math.min(30, filteredQuestions.length);
+    const session = buildSmartSession(filteredQuestions, n);
+
+    // Usamos cola aleatoria (sin repetir)
+    studySettings.reviewRandom = true;
+    saveStudySettings();
+
+    reviewQueue = [...session];
+    shuffle(reviewQueue);
+    reviewCurrent = null;
+    nextReviewQuestion();
 }
 
 /* ----------------- MODO RÁPIDO ----------------- */
@@ -718,7 +1191,7 @@ function showFastQuestion() {
     document.getElementById("app").innerHTML = `
         <div class="card question-card">
 
-            <div class="q-meta">${q.Category} • ${q.Aircraft} • ${q.System}</div>
+            <div class="q-meta">${q.Category} • ${q.Aircraft} • ${q.System} ${q._flagged ? " <span style=\"color:#d32f2f;font-weight:700;\">🚩 MARCADA</span>" : ""}</div>
 
             <div class="question-text">${q.Question}</div>
 
@@ -731,9 +1204,16 @@ function showFastQuestion() {
 
             <div id="feedback" class="feedback-area"></div>
 
+            <div class="options" style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+                <button class="btn-secondary" onclick="playClick(); toggleFlagCurrent()">🚩 Marcar / Desmarcar</button>
+                <button class="btn-secondary" onclick="playClick(); skipQuestion()">⏭️ Saltar</button>
+            </div>
+
             <button class="btn-secondary" onclick="playClick(); showMenu()">Volver</button>
         </div>
     `;
+
+    snapshotSession();
 }
 
 /* ----------------- MODO SWIPE ----------------- */
@@ -809,7 +1289,7 @@ function showHybridQuestion() {
     document.getElementById("app").innerHTML = `
         <div class="card question-card">
 
-            <div class="q-meta">${q.Category} • ${q.Aircraft} • ${q.System}</div>
+            <div class="q-meta">${q.Category} • ${q.Aircraft} • ${q.System} ${q._flagged ? " <span style=\"color:#d32f2f;font-weight:700;\">🚩 MARCADA</span>" : ""}</div>
 
             <div class="question-text">${q.Question}</div>
 
@@ -822,9 +1302,16 @@ function showHybridQuestion() {
 
             <div id="feedback" class="feedback-area"></div>
 
+            <div class="options" style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+                <button class="btn-secondary" onclick="playClick(); toggleFlagCurrent()">🚩 Marcar / Desmarcar</button>
+                <button class="btn-secondary" onclick="playClick(); skipQuestion()">⏭️ Saltar</button>
+            </div>
+
             <button class="btn-secondary" onclick="playClick(); showMenu()">Volver</button>
         </div>
     `;
+
+    snapshotSession();
 }
 
 /* ----------------- MODO SRS ----------------- */
@@ -862,7 +1349,7 @@ function showSrsQuestion() {
     document.getElementById("app").innerHTML = `
         <div class="card question-card">
 
-            <div class="q-meta">${q.Category} • ${q.Aircraft} • ${q.System}</div>
+            <div class="q-meta">${q.Category} • ${q.Aircraft} • ${q.System} ${q._flagged ? " <span style=\"color:#d32f2f;font-weight:700;\">🚩 MARCADA</span>" : ""}</div>
 
             <div class="question-text">${q.Question}</div>
 
@@ -875,9 +1362,16 @@ function showSrsQuestion() {
 
             <div id="feedback" class="feedback-area"></div>
 
+            <div class="options" style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+                <button class="btn-secondary" onclick="playClick(); toggleFlagCurrent()">🚩 Marcar / Desmarcar</button>
+                <button class="btn-secondary" onclick="playClick(); skipQuestion()">⏭️ Saltar</button>
+            </div>
+
             <button class="btn-secondary" onclick="playClick(); showMenu()">Volver</button>
         </div>
     `;
+
+    snapshotSession();
 }
 
 /* ----------------- MODO DRILL POR SISTEMA ----------------- */
@@ -890,6 +1384,39 @@ function startSystemDrillMode() {
             <h2>Entrenar por sistema</h2>
 
             <div class="filter-grid">
+
+                <div class="filter-item">
+                    <label>Buscar texto</label>
+                    <input type="text" id="filterSearch" placeholder="Ej: RAT, PTU, VLO..." />
+                </div>
+
+                <div class="filter-item">
+                    <label>Repaso aleatorio</label>
+                    <select id="filterReviewRandom">
+                        <option value="1" selected>Sí</option>
+                        <option value="0">No</option>
+                    </select>
+                </div>
+
+                <div class="filter-item">
+                    <label>Examen balanceado por sistema</label>
+                    <select id="filterExamBalanced">
+                        <option value="1" selected>Sí</option>
+                        <option value="0">No</option>
+                    </select>
+                </div>
+
+                <div class="filter-item">
+                    <label>Nº preguntas examen</label>
+                    <select id="filterExamCount">
+                        <option value="20">20</option>
+                        <option value="40" selected>40</option>
+                        <option value="60">60</option>
+                        <option value="80">80</option>
+                    </select>
+                </div>
+
+
                 ${systems.map(s => `
                     <button onclick="playClick(); startSystemDrill('${s}')">${s}</button>
                 `).join("")}
@@ -918,18 +1445,32 @@ function startSystemDrill(system) {
    Corrección, feedback PRO, estadísticas, avance, SRS
    ============================================================ */
 
-/* ----------------- PARSER CSV AVANZADO ----------------- */
-
+/* ----------------- PARSER CSV (ROBUSTO) ----------------- */
+/*
+  - Soporta comillas dobles, comas internas y saltos de línea dentro de campos.
+  - Auto-detecta separador: "," o ";" (según la cabecera).
+*/
 function parseCSV(text) {
+    // Normalizar saltos de línea sin regex literals
+    const raw = String(text).split("\r\n").join("\n").split("\r").join("\n");
+
+    const firstLine = raw.split("\n").find(l => l.trim() !== "") || "";
+
+    // Detectar separador por cabecera (típico: Europa usa ';')
+    const commaCount = (firstLine.match(/,/g) || []).length;
+    const semiCount  = (firstLine.match(/;/g) || []).length;
+    const sep = semiCount > commaCount ? ";" : ",";
+
     const rows = [];
     let current = [];
     let insideQuotes = false;
     let value = "";
 
-    for (let i = 0; i < text.length; i++) {
-        const c = text[i];
-        const next = text[i + 1];
+    for (let i = 0; i < raw.length; i++) {
+        const c = raw[i];
+        const next = raw[i + 1];
 
+        // Escapar comillas dobles dentro de comillas: "" -> "
         if (c === '"' && next === '"') {
             value += '"';
             i++;
@@ -941,19 +1482,19 @@ function parseCSV(text) {
             continue;
         }
 
-        if (c === ',' && !insideQuotes) {
+        if (c === sep && !insideQuotes) {
             current.push(value.trim());
             value = "";
             continue;
         }
 
-        if ((c === '\n' || c === '\r') && !insideQuotes) {
+        if (c === "\n" && !insideQuotes) {
             if (value.length > 0 || current.length > 0) {
                 current.push(value.trim());
                 rows.push(current);
-                current = [];
-                value = "";
             }
+            current = [];
+            value = "";
             continue;
         }
 
@@ -965,12 +1506,19 @@ function parseCSV(text) {
         rows.push(current);
     }
 
-    const headers = rows.shift();
-    return rows.map(r => {
-        const obj = {};
-        headers.forEach((h, i) => obj[h] = r[i] || "");
-        return obj;
-    });
+    if (!rows.length) return [];
+
+    const headers = rows.shift().map(h => (h || "").trim());
+
+    return rows
+        .filter(r => r.some(cell => (cell || "").trim() !== ""))
+        .map(r => {
+            const obj = {};
+            headers.forEach((h, i) => {
+                obj[h] = (r[i] ?? "").toString().trim();
+            });
+            return obj;
+        });
 }
 
 /* ----------------- FEEDBACK PRO + CORRECCIÓN ----------------- */
@@ -983,40 +1531,69 @@ function checkAnswer(letter) {
         mode === "srs" ? srsCurrent :
         filteredQuestions[currentIndex];
 
-    const correct = q.Correct.trim().toUpperCase();
+    // Leer respuesta correcta (CSV: CorrectAnswer). Fallback: Correct (banco antiguo).
+    const correct = (q.CorrectAnswer || q.Correct || "").trim().toUpperCase();
     const isCorrect = letter === correct;
+
+    // Bloquear botones (si existen)
+    const buttons = document.querySelectorAll(".modern-options button");
+    buttons.forEach(b => { try { b.disabled = true; } catch(e) {} });
 
     const feedback = document.getElementById("feedback");
 
-    // Bloquear botones
-    const buttons = document.querySelectorAll(".modern-options button");
-    buttons.forEach(b => b.disabled = true);
-
-    if (isCorrect) {
-        playCorrect();
-        vibrate("correct");
-        feedback.textContent = "✔️ Correcto";
-        feedback.style.color = "#2e7d32";
-        q._correct = true;
-        updateStats(q, true);
-        updateSrs(q, true);
-    } else {
-        playWrong();
-        vibrate("wrong");
-        feedback.textContent = "❌ Incorrecto";
-        feedback.style.color = "#c62828";
-        q._wrongCount = (q._wrongCount || 0) + 1;
-        updateStats(q, false);
-        updateSrs(q, false);
+    // Si no hay clave, avisar pero permitir avanzar (no bloquea la app)
+    if (!correct || !["A","B","C","D"].includes(correct)) {
+        if (feedback) {
+            feedback.textContent = "⚠️ Esta pregunta no tiene CorrectAnswer válido en el CSV.";
+            feedback.style.color = "#b26a00";
+        }
+        // Avanzar igual
+        setTimeout(() => {
+            try { nextQuestion(); } catch (e) { console.error(e); showMenu(); }
+        }, 800);
+        return;
     }
 
-    highlightCorrectOption(correct);
+    try {
+        if (isCorrect) {
+            playCorrect();
+            vibrate("correct");
+            if (feedback) {
+                feedback.textContent = "✔️ Correcto";
+                feedback.style.color = "#2e7d32";
+            }
+            q._correct = true;
+            updateStats(q, true);
+            updateSrs(q, true);
+        } else {
+            playWrong();
+            vibrate("wrong");
+            if (feedback) {
+                feedback.textContent = "❌ Incorrecto";
+                feedback.style.color = "#c62828";
+            }
+            q._wrongCount = (q._wrongCount || 0) + 1;
+            updateStats(q, false);
+            updateSrs(q, false);
+        }
 
-    // Esperar 2 segundos antes de avanzar
+        // Marcar opción correcta si podemos
+        try { highlightCorrectOption(correct); } catch (e) { console.warn(e); }
+
+    } catch (err) {
+        console.error("checkAnswer error:", err);
+        if (feedback) {
+            feedback.textContent = "⚠️ Error interno. Avanzando…";
+            feedback.style.color = "#b26a00";
+        }
+    }
+
+    // Avanzar SIEMPRE (aunque haya error)
     setTimeout(() => {
-        nextQuestion();
-    }, 2000);
+        try { nextQuestion(); } catch (e) { console.error(e); showMenu(); }
+    }, 1200);
 }
+
 
 function highlightCorrectOption(correctLetter) {
     const buttons = document.querySelectorAll(".modern-options button");
@@ -1034,16 +1611,62 @@ function highlightCorrectOption(correctLetter) {
     });
 }
 
+function getCurrentQuestionObject() {
+    return (
+        mode === "exam" ? examQuestions[examIndex] :
+        mode === "fast" ? fastCurrent :
+        mode === "hybrid" ? hybridCurrent :
+        mode === "srs" ? srsCurrent :
+        mode === "swipe" ? swipeCurrent :
+        mode === "flash" ? flashCurrent :
+        mode === "company" ? companyExamQuestions[companyExamIndex] :
+        filteredQuestions[currentIndex]
+    );
+}
+
+
+
+function snapshotSession() {
+    // Guarda el pool filtrado por IDs para poder reanudar
+    const filteredIds = (filteredQuestions || []).map(q => String(q.ID));
+    const q = getCurrentQuestionObject();
+    const currentId = q ? String(q.ID) : null;
+
+    saveLastSession({
+        bankSignature: String(questions.length),
+        mode: mode,
+        currentId,
+        filteredIds,
+        reviewRandom: !!studySettings.reviewRandom
+    });
+}
+function toggleFlagCurrent() {
+    const q = getCurrentQuestionObject();
+    if (!q) return;
+    const now = !isFlagged(q);
+    setFlag(q, now);
+    q._flagged = now;
+    alert(now ? "✅ Pregunta marcada" : "🚩 Marca quitada");
+}
+
+function skipQuestion() {
+    try { nextQuestion(); } catch (e) { console.error(e); showMenu(); }
+}
+
 /* ----------------- AVANCE ENTRE PREGUNTAS ----------------- */
 
 function nextQuestion() {
     if (mode === "review") {
-        currentIndex++;
-        if (currentIndex >= filteredQuestions.length) {
-            alert("Has completado el repaso.");
-            showMenu();
+        if (studySettings.reviewRandom) {
+            nextReviewQuestion();
         } else {
-            showQuestion();
+            currentIndex++;
+            if (currentIndex >= filteredQuestions.length) {
+                alert("Has completado el repaso.");
+                showMenu();
+            } else {
+                showQuestion();
+            }
         }
         return;
     }
@@ -1089,11 +1712,10 @@ function updateStats(q, correct) {
     const key = q.ID || q.Question;
 
     if (!user.stats[key]) {
-        user.stats[key] = { correct: 0, wrong: 0 };
+        user.stats[key] = { correct: 0, wrong: 0, srsLevel: 0, srsNext: 0, flagged: false, lastSeen: null };
     }
 
-    if (correct) user.stats[key].correct++;
-    else user.stats[key].wrong++;
+    if (correct) user.stats[key].correct++; else user.stats[key].wrong++;
 
     // Progreso diario
     const today = todayISO();
@@ -1109,19 +1731,31 @@ function updateStats(q, correct) {
 /* ----------------- SRS (SPACED REPETITION SYSTEM) ----------------- */
 
 function updateSrs(q, correct) {
-    if (!q._srsLevel) q._srsLevel = 0;
+    const wrap = getUserStatsObject();
+    if (!wrap) return;
 
-    if (correct) {
-        q._srsLevel++;
-    } else {
-        q._srsLevel = Math.max(0, q._srsLevel - 1);
+    const key = getQKey(q);
+    if (!wrap.user.stats[key]) {
+        wrap.user.stats[key] = { correct: 0, wrong: 0, srsLevel: 0, srsNext: 0, flagged: false, lastSeen: null };
     }
 
+    let level = wrap.user.stats[key].srsLevel || 0;
+    if (correct) level++;
+    else level = Math.max(0, level - 1);
+
     const intervals = [0, 1, 3, 7, 14, 30]; // días
-    const idx = Math.min(q._srsLevel, intervals.length - 1);
+    const idx = Math.min(level, intervals.length - 1);
     const days = intervals[idx];
 
-    q._srsNext = Date.now() + days * 24 * 60 * 60 * 1000;
+    const next = Date.now() + days * 24 * 60 * 60 * 1000;
+
+    wrap.user.stats[key].srsLevel = level;
+    wrap.user.stats[key].srsNext = next;
+
+    q._srsLevel = level;
+    q._srsNext = next;
+
+    saveUserData(wrap.data);
 }
 
 /* ============================================================
@@ -1216,6 +1850,56 @@ function changeTheme(theme) {
 
 /* ----------------- AJUSTES → USUARIOS ----------------- */
 
+function exportProgress() {
+    const data = loadUserData();
+    const uid = data.currentUserId;
+    if (!uid) { alert("No hay usuario seleccionado."); return; }
+
+    const payload = {
+        version: 1,
+        exportedAt: Date.now(),
+        userId: uid,
+        user: data.users[uid]
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `airbits_progress_${data.users[uid].name || "user"}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
+function importProgressFromFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = e => {
+        try {
+            const payload = JSON.parse(e.target.result);
+            if (!payload.user || !payload.user.name) throw new Error("Formato inválido");
+
+            const data = loadUserData();
+            const id = "u" + Date.now();
+            data.users[id] = payload.user;
+            data.currentUserId = id;
+            saveUserData(data);
+
+            alert("Progreso importado ✅");
+            updateCurrentUserInfo();
+            showUserManagement();
+        } catch (err) {
+            alert("No se pudo importar el progreso (JSON inválido).");
+        }
+    };
+    reader.readAsText(file);
+}
+
 function showUserManagement() {
     const data = loadUserData();
     const users = data.users;
@@ -1234,6 +1918,13 @@ function showUserManagement() {
                     </div>
                 `).join("")}
             </div>
+        </div>
+
+        <div class="setting-group">
+            <h4>Progreso</h4>
+            <button onclick="playClick(); exportProgress()">⬇️ Exportar progreso (JSON)</button>
+            <p style="margin-top:8px; opacity:0.7;">Importar crea un usuario nuevo con ese progreso.</p>
+            <input type="file" accept=".json" onchange="importProgressFromFile(event)">
         </div>
 
         <div class="setting-group">
@@ -1348,60 +2039,86 @@ function showWeaknessAnalysis() {
     }
 
     const stats = user.stats || {};
-    const rows = [];
+    const bySystem = {};
 
     for (const q of questions) {
         const key = q.ID || q.Question;
         const s = stats[key];
-
         if (!s) continue;
 
-        const total = s.correct + s.wrong;
-        if (total === 0) continue;
+        const total = (s.correct || 0) + (s.wrong || 0);
+        if (!total) continue;
 
-        const acc = Math.round((s.correct / total) * 100);
-
-        rows.push({
-            system: q.System,
-            question: q.Question,
-            total,
-            accuracy: acc
-        });
+        const sys = (q.System || "Otros").trim() || "Otros";
+        if (!bySystem[sys]) bySystem[sys] = { sys, correct: 0, wrong: 0, total: 0, acc: 0 };
+        bySystem[sys].correct += (s.correct || 0);
+        bySystem[sys].wrong += (s.wrong || 0);
+        bySystem[sys].total += total;
     }
 
-    rows.sort((a, b) => a.accuracy - b.accuracy);
+    const rows = Object.values(bySystem).map(r => {
+        r.acc = r.total ? Math.round((r.correct / r.total) * 100) : 0;
+        return r;
+    });
+
+    rows.sort((a, b) => a.acc - b.acc);
 
     document.getElementById("app").innerHTML = `
         <div class="card">
-            <h2>🩻 Análisis de debilidades</h2>
+            <h2>🩻 Debilidades por sistema</h2>
+            <p style="opacity:0.7;">Ordenado de menor a mayor precisión.</p>
 
             <table>
                 <tr>
                     <th>Sistema</th>
-                    <th>Pregunta</th>
                     <th>Intentos</th>
                     <th>Precisión</th>
+                    <th>Acción</th>
                 </tr>
 
                 ${rows.map(r => `
                     <tr>
-                        <td>${r.system}</td>
-                        <td>${r.question}</td>
+                        <td>${r.sys}</td>
                         <td>${r.total}</td>
-                        <td data-acc="${r.accuracy}">${r.accuracy}%</td>
+                        <td data-acc="${r.acc}">${r.acc}%</td>
+                        <td><button class="btn-secondary" onclick="playClick(); startWeakSystemDrill('${r.sys.replace(/'/g, "\'")}')">Entrenar 20</button></td>
                     </tr>
                 `).join("")}
             </table>
 
-            <button class="btn-secondary" onclick="playClick(); showMenu()">⬅️ Volver</button>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:16px;">
+                <button class="btn-secondary" onclick="playClick(); showMenu()">⬅️ Volver</button>
+            </div>
         </div>
     `;
 }
+
+function startWeakSystemDrill(system) {
+    const pool = questions.filter(q => (q.System || "Otros") === system);
+    if (!pool.length) {
+        alert("No hay preguntas para este sistema.");
+        return;
+    }
+    filteredQuestions = pool;
+
+    // sesión inteligente dentro del sistema: 20
+    mode = "review";
+    studySettings.reviewRandom = true;
+    saveStudySettings();
+
+    const session = buildSmartSession(filteredQuestions, Math.min(20, filteredQuestions.length));
+    reviewQueue = [...session];
+    shuffle(reviewQueue);
+    reviewCurrent = null;
+    nextReviewQuestion();
+}
+
 
 /* ----------------- INICIALIZACIÓN ----------------- */
 
 function initApp() {
     loadAppSettings();
+    loadStudySettings();
     loadFastWeights();
     updateCurrentUserInfo();
     initAudio();
@@ -1442,3 +2159,4 @@ function toggleThemeQuick() {
 window.onload = () => {
     initApp();
 };
+function triggerCSVImport(){ const el=document.getElementById('csvFile'); if(el) el.click(); }
