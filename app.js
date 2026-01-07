@@ -13,6 +13,15 @@ let currentIndex = 0;
 
 let studySettings = { reviewRandom: true, examBalanced: true, examCount: 40 };
 
+// UI: pestañas del menú principal
+let menuTab = localStorage.getItem("airbits_menu_tab") || "study";
+function setMenuTab(tab) {
+    menuTab = tab;
+    localStorage.setItem("airbits_menu_tab", tab);
+    showMenu();
+}
+
+
 let reviewQueue = [];
 let reviewCurrent = null;
 
@@ -2150,3 +2159,4 @@ function toggleThemeQuick() {
 window.onload = () => {
     initApp();
 };
+function triggerCSVImport(){ const el=document.getElementById('csvFile'); if(el) el.click(); }
