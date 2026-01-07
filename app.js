@@ -1589,9 +1589,11 @@ function checkAnswer(letter) {
     }
 
     // Avanzar SIEMPRE (aunque haya error)
+    // Más tiempo si fallas para leer la corrección
+    const delayMs = isCorrect ? 1200 : 2600;
     setTimeout(() => {
         try { nextQuestion(); } catch (e) { console.error(e); showMenu(); }
-    }, 1200);
+    }, delayMs);
 }
 
 
